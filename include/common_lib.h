@@ -14,9 +14,6 @@ which is included as part of this source code package.
 #include <pcl/segmentation/sac_segmentation.h>
 #include <pcl/filters/extract_indices.h>
 #include <pcl/common/transforms.h>
-#include <pcl_ros/point_cloud.h>
-#include <pcl_ros/filters/passthrough.h>
-#include <pcl_conversions/pcl_conversions.h>
 #include <pcl/filters/statistical_outlier_removal.h>
 #include <pcl/features/boundary.h>
 #include <pcl/features/normal_3d.h>
@@ -25,8 +22,12 @@ which is included as part of this source code package.
 #include <pcl/segmentation/extract_clusters.h>
 #include <pcl/registration/transformation_estimation_svd.h>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
+#include <iostream>
+#include <vector>
 #include <opencv2/opencv.hpp>
-#include <tf/tf.h>
+#include <yaml-cpp/yaml.h>
 #include "color.h"
 
 using namespace std;
@@ -37,8 +38,15 @@ using namespace pcl;
 #define DEBUG 1
 #define GEOMETRY_TOLERANCE 0.08
 
+// ===== 非 ROS 日志宏：保留 ROS_INFO/WARN/ERROR 调用语法，去掉 roscpp 依赖 =====
+#define ROS_INFO(...)          do { std::printf(__VA_ARGS__); std::printf("\n"); } while (0)
+#define ROS_WARN(...)          do { std::fprintf(stderr, __VA_ARGS__); std::fprintf(stderr, "\n"); } while (0)
+#define ROS_ERROR(...)         do { std::fprintf(stderr, __VA_ARGS__); std::fprintf(stderr, "\n"); } while (0)
+#define ROS_ERROR_STREAM(x)    do { std::cerr << x << std::endl; } while (0)
+#define ROS_WARN_STREAM(x)     do { std::cerr << x << std::endl; } while (0)
+
 // ===== 自定义点类型：XYZ + intensity + ring =====
-namespace Common 
+namespace Common
 {
   struct Point
   {
@@ -56,58 +64,75 @@ POINT_CLOUD_REGISTER_POINT_STRUCT(Common::Point,
   (std::uint16_t, ring, ring)
 );
 
-// 参数结构体
+// 参数结构体：相机内参（vehicle_config 填入）+ 标定板几何/ROI（settings YAML 填入）+ 输出路径（CLI 填入）
 struct Params {
+  // 相机内参 + 畸变模型
+  double fx = 0, fy = 0, cx = 0, cy = 0;
+  double k1 = 0, k2 = 0, p1 = 0, p2 = 0;   // pinhole/rational 路径喂给 cv::undistort
+  std::vector<double> dist_coeffs;          // fisheye/equidistant 路径用（k1..k4）
+  std::string camera_model = "pinhole";     // 来自 camera.yaml 的 model_type
+  int image_width = 0, image_height = 0;    // camera.yaml 元数据，仅供参考不参与计算
+
+  // 标定板几何 + LiDAR ROI
   double x_min, x_max, y_min, y_max, z_min, z_max;
   bool use_auto_lidar_roi;
-  double fx, fy, cx, cy, k1, k2, p1, p2;
   double marker_size, delta_width_qr_center, delta_height_qr_center;
   double delta_width_circles, delta_height_circles, circle_radius, annulus_half_width;
   double board_width, board_height, board_roi_margin, board_roi_depth;
   double auto_roi_voxel_leaf, annulus_voxel_leaf;
   int min_detected_markers;
-  string image_path;
-  string bag_path;
-  string lidar_topic;
-  string output_path;
+
+  // 输出目录
+  std::string output_path;
 };
 
-// 读取参数
-Params loadParameters(ros::NodeHandle &nh) {
+// 从 settings YAML 读取标定板几何/LiDAR ROI 参数；缺任意必需字段直接报错退出
+// （不像原来 nh.param 那样静默落到硬编码默认值）。
+inline Params loadSettingsYaml(const std::string &path)
+{
   Params params;
-  nh.param("fx", params.fx, 1215.31801774424);
-  nh.param("fy", params.fy, 1214.72961288138);
-  nh.param("cx", params.cx, 1047.86571859677);
-  nh.param("cy", params.cy, 745.068353101898);
-  nh.param("k1", params.k1, -0.33574781188503);
-  nh.param("k2", params.k2, 0.10996870793601);
-  nh.param("p1", params.p1, 0.000157303079833973);
-  nh.param("p2", params.p2, 0.000544930726278493);
-  nh.param("marker_size", params.marker_size, 0.2);
-  nh.param("delta_width_qr_center", params.delta_width_qr_center, 0.55);
-  nh.param("delta_height_qr_center", params.delta_height_qr_center, 0.35);
-  nh.param("delta_width_circles", params.delta_width_circles, 0.5);
-  nh.param("delta_height_circles", params.delta_height_circles, 0.4);
-  nh.param("min_detected_markers", params.min_detected_markers, 3);
-  nh.param("circle_radius", params.circle_radius, 0.12);
-  nh.param("annulus_half_width", params.annulus_half_width, 0.025);
-  nh.param("board_width", params.board_width, 1.4);
-  nh.param("board_height", params.board_height, 1.0);
-  nh.param("board_roi_margin", params.board_roi_margin, 0.08);
-  nh.param("board_roi_depth", params.board_roi_depth, 0.12);
-  nh.param("auto_roi_voxel_leaf", params.auto_roi_voxel_leaf, 0.01);
-  nh.param("annulus_voxel_leaf", params.annulus_voxel_leaf, 0.005);
-  nh.param("image_path", params.image_path, string("/home/chunran/calib_ws/src/fast_calib/data/image.png"));
-  nh.param("bag_path", params.bag_path, string("/home/chunran/calib_ws/src/fast_calib/data/input.bag"));
-  nh.param("lidar_topic", params.lidar_topic, string("/livox/lidar"));
-  nh.param("output_path", params.output_path, string("/home/chunran/calib_ws/src/fast_calib/output"));
-  nh.param("use_auto_lidar_roi", params.use_auto_lidar_roi, false);
-  nh.param("x_min", params.x_min, 1.5);
-  nh.param("x_max", params.x_max, 3.0);
-  nh.param("y_min", params.y_min, -1.5);
-  nh.param("y_max", params.y_max, 2.0);
-  nh.param("z_min", params.z_min, -0.5);
-  nh.param("z_max", params.z_max, 2.0);
+  YAML::Node y;
+  try
+  {
+    y = YAML::LoadFile(path);
+  }
+  catch (const std::exception &e)
+  {
+    ROS_ERROR_STREAM("[Settings] Failed to load " << path << ": " << e.what());
+    std::exit(1);
+  }
+
+  auto need = [&](const char *key) -> YAML::Node {
+    if (!y[key])
+    {
+      ROS_ERROR_STREAM("[Settings] Missing required key '" << key << "' in " << path);
+      std::exit(1);
+    }
+    return y[key];
+  };
+
+  params.marker_size            = need("marker_size").as<double>();
+  params.delta_width_qr_center  = need("delta_width_qr_center").as<double>();
+  params.delta_height_qr_center = need("delta_height_qr_center").as<double>();
+  params.delta_width_circles    = need("delta_width_circles").as<double>();
+  params.delta_height_circles   = need("delta_height_circles").as<double>();
+  params.min_detected_markers   = need("min_detected_markers").as<int>();
+  params.circle_radius          = need("circle_radius").as<double>();
+  params.annulus_half_width     = need("annulus_half_width").as<double>();
+  params.board_width            = need("board_width").as<double>();
+  params.board_height           = need("board_height").as<double>();
+  params.board_roi_margin       = need("board_roi_margin").as<double>();
+  params.board_roi_depth        = need("board_roi_depth").as<double>();
+  params.auto_roi_voxel_leaf    = need("auto_roi_voxel_leaf").as<double>();
+  params.annulus_voxel_leaf     = need("annulus_voxel_leaf").as<double>();
+  params.use_auto_lidar_roi     = need("use_auto_lidar_roi").as<bool>();
+  params.x_min = need("x_min").as<double>();
+  params.x_max = need("x_max").as<double>();
+  params.y_min = need("y_min").as<double>();
+  params.y_max = need("y_max").as<double>();
+  params.z_min = need("z_min").as<double>();
+  params.z_max = need("z_max").as<double>();
+
   return params;
 }
 
