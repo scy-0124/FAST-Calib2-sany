@@ -57,6 +57,19 @@ inline bool loadCameraFromVehicleConfig(const std::string &vehicle_config_dir,
             return false;
         }
         const YAML::Node &mp = cam["camera_model_param"];
+
+        // 检查必需的相机内参字段是否存在
+        const char *required_fields[] = {"fx", "fy", "cx", "cy"};
+        for (const char *field : required_fields)
+        {
+            if (!mp[field])
+            {
+                ROS_ERROR_STREAM("[VehicleConfig] camera '" << camera_name
+                    << "' camera_model_param missing required field: " << field);
+                return false;
+            }
+        }
+
         params.fx = mp["fx"].as<double>();
         params.fy = mp["fy"].as<double>();
         params.cx = mp["cx"].as<double>();
