@@ -146,6 +146,13 @@ int main(int argc, char **argv)
     validateTargetGeometry(qr_centers, params.delta_width_circles, params.delta_height_circles, "QR");
     validateTargetGeometry(lidar_centers, params.delta_width_circles, params.delta_height_circles, "LiDAR");
 
+    if (lidar_centers->size() != TARGET_NUM_CIRCLES || qr_centers->size() != TARGET_NUM_CIRCLES)
+    {
+        ROS_ERROR("[Main] Detection failed: lidar_centers=%zu, qr_centers=%zu (need %d each). Aborting calibration.",
+                  lidar_centers->size(), qr_centers->size(), TARGET_NUM_CIRCLES);
+        return 1;
+    }
+
     saveTargetHoleCenters(lidar_centers, qr_centers, params);
 
     Eigen::Matrix4f transformation;
