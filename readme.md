@@ -18,3 +18,14 @@
   lidar_center_test.cpp → 文档收尾），每个任务用 Taijia_001 真实样例数据实跑验证。发现本机
   未安装 ROS，因此计划里的顺序刻意把 common_lib.h 去 ROS 化放最前面，保证后续每个任务都能
   standalone 编译验证。尚未开始执行。
+- 完成"去 ROS 化"实施：三个可执行文件（fast_calib/multi_fast_calib/lidar_center_test）
+  全部改成纯 CLI + 纯 CMake，删除 package.xml；新增 `include/pcd_io.hpp`（PCD 单帧/文件夹
+  合并 + LiDAR 类型探测）和 `include/vehicle_config_reader.hpp`（vehicle_config camera.yaml
+  读取 + 鱼眼转 pinhole）；`config/qr_params.yaml` 瘦身为纯标定板几何/LiDAR ROI 参数。已用
+  Taijia_001 样例数据（front_fisheye 图像 + front_jt128 单帧/27帧文件夹点云）实跑验证三个
+  可执行文件均可正常编译运行。
+  
+  **已知限制**：用本机真实样例数据（Taijia_001 数据集）跑 LiDAR 检测时，当前 `use_auto_lidar_roi`
+  的自动 ROI 提取在这批点云上找不到足够的高反光聚类（0个），凑不出4个圆心——这是标定板反射率/ROI
+  阈值跟这批数据不匹配的调参问题，不是这次去ROS化引入的代码缺陷，但会影响之后有人拿这批数据实跑
+  标定的预期（不会跑出真实的4个圆心结果），需要后续单独调参解决。

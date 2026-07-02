@@ -6,28 +6,28 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - **本仓库内的对话一律使用中文回复**，不要用英文作答（代码注释、commit message 等可按实际需要保留英文/中文混排）。
 - **开始新一轮代码改动前，先确认当前 HEAD 已经 push 到 `origin/main`**（`git status` 看是否 ahead/落后，落后就先 `git push`）。也就是说：先把"上一个版本"备份到远端，再在此基础上做下一步修改，不要让多轮未上传的本地改动堆积在一起。
-- **本仓库当前的核心开发方向是"去 ROS 化"**：把下面「去 ROS 化耦合点」列出的 ROS/catkin/rosbag 依赖逐步剥离，改造成不依赖 ROS 运行时的纯 CLI 工具（具体目标接口——参数怎么传、点云/图像怎么输入——以用户在对话中给出的方案为准，不要自行假设照抄其他项目的设计）。动手改动这部分之前，先跟用户确认接口设计，不要一次性大改。
+- **本仓库已完成"去 ROS 化"**：三个可执行文件（`fast_calib`/`multi_fast_calib`/`lidar_center_test`）已改成不依赖 ROS 运行时的纯 CLI 工具，纯 CMake 编译，见下方「编译」「运行」两节。设计文档见 `docs/superpowers/specs/2026-07-01-去ros化-design.md`，实施计划见 `docs/superpowers/plans/2026-07-01-去ros化-implementation.md`。
 - **每次对代码/文档有实质改动后，都要在 `readme.md` 里按日期追加一条记录**（新记录写在最上面还是最下面以 `readme.md` 现有格式为准；没有格式约定时按日期从旧到新追加在文件末尾），简要说明改了什么、为什么改。这是改动日志，不要和 `README.md`（如果以后补充项目介绍）混在一起。
 
 ## 仓库定位
 
-这是 HKU MARS [FAST-Calib](https://github.com/hku-mars/FAST-Calib) 的**反光环 annulus 标定板版本（FAST-Calib2）**，`git remote origin` 指向 `github.com/scy-0124/FAST-Calib2-sany`。跟同一台机器上 `/home/calib/code/FAST-Calib2`（已去 ROS 化）是两套独立代码，**不要混用两边的运行约定**——本仓库现在仍是完整的 **ROS1 catkin 包**（`package.xml` 里 `<buildtool_depend>catkin</buildtool_depend>`），一切输入/输出都走 ROS（`rosparam` 传参、`rosbag` 读点云、`roslaunch` 启动），没有独立 CMake 编译路径，也没有 `-c`/`vehicle_config` 这类 CLI 参数体系。
+这是 HKU MARS [FAST-Calib](https://github.com/hku-mars/FAST-Calib) 的**反光环 annulus 标定板版本（FAST-Calib2）**，`git remote origin` 指向 `github.com/scy-0124/FAST-Calib2-sany`。跟同一台机器上 `/home/calib/code/FAST-Calib2`（已去 ROS 化）是两套独立代码，**不要混用两边的运行约定**——本仓库现在是纯 CMake 工程（不依赖 ROS 运行时），相机内参走 vehicle_config 的 `camera.yaml`（`-c`/`--camera`），标定板几何/LiDAR ROI 走项目自带的 settings YAML（`--settings`）。
 
 标定板设计：一块板上同时有 4 个反光环（LiDAR 侧检测用）和 4 个 ArUco 视觉标记（相机侧检测用），几何尺寸统一在 `config/qr_params.yaml` 里配置（`delta_width_circles` / `delta_height_circles` 等）。
 
 ## 编译
 
-必须放在某个 catkin workspace 的 `src/` 目录下，用 catkin 编译，**不能**像去 ROS 版本那样裸 `cmake .. && make`：
+纯 CMake 工程，不需要 catkin workspace，不需要 ROS：
 
 ```bash
-cd <catkin_ws>
-catkin_make          # 或 catkin build
-source devel/setup.bash
+mkdir -p build && cd build
+cmake ..
+make -j$(nproc)
 ```
 
-依赖：ROS1（`roscpp` / `sensor_msgs` / `pcl_ros` / `pcl_conversions` / `geometry_msgs` / `livox_ros_driver` 等，见 `package.xml`）、PCL >= 1.10、OpenCV >= 4.0（用到 `opencv_aruco`）。
+依赖：PCL >= 1.10、OpenCV >= 4.0（用到 `opencv_aruco`）、yaml-cpp（本机走系统包 `libyaml-cpp-dev`，`find_package(yaml-cpp)` 导出 `yaml-cpp::yaml-cpp`）。
 
-`CMakeLists.txt` 里只有三个可执行目标（`add_executable`），**没有 test target、没有 lint target**：
+`CMakeLists.txt` 里三个可执行目标（`add_executable`），**没有 test target、没有 lint target**：
 
 | 目标 | 源文件 | 作用 |
 | --- | --- | --- |
@@ -35,36 +35,52 @@ source devel/setup.bash
 | `multi_fast_calib` | `src/multi_scene.cpp` | 多场景联合标定：读多次单场景结果做加权 SVD |
 | `lidar_center_test` | `src/lidar_center_test.cpp` | LiDAR-only 调参工具，不跑相机侧 |
 
-`package.xml` 里声明了 `test_depend rostest/rosbag`，但仓库里没有实际测试代码，是历史遗留声明。
-
 ## 运行
 
-参数**全部**通过 `rosparam` 从 `config/qr_params.yaml` 加载（`Params loadParameters(ros::NodeHandle&)`，`include/common_lib.h:76`），一份 YAML 里混合了相机内参、标定板几何尺寸、LiDAR ROI、rosbag/图像路径、输出路径——没有分文件、没有 CLI 覆盖机制（`lidar_center_test` 例外，见下）。
+参数分三处来源：相机内参从 vehicle_config 的 `camera.yaml` 读（`-c <dir> --camera <name>`）；
+标定板几何/LiDAR ROI 等算法参数走项目自带的 settings YAML（`--settings <path>`，即瘦身后的
+`config/qr_params.yaml`，缺字段直接报错退出，没有编译期默认路径）；图片/点云/输出目录都是
+显式 CLI 参数。
 
 单场景标定：
 
 ```bash
-roslaunch fast_calib calib.launch
+./build/fast_calib \
+  --image <path/to/image.png> \
+  --pointcloud <path/to/frame.pcd 或 path/to/folder/> \
+  --settings config/qr_params.yaml \
+  -c <vehicle_config_dir> --camera <camera_name> \
+  -o <output_dir> \
+  [--lidar-type auto|solid|mech]
 ```
 
-`launch/calib.launch` 内部就是 `rosparam load config/qr_params.yaml` + 启动 `fast_calib` 节点，跑完后**追加**写入 `<output_path>/circle_center_record.txt`（每次一个 `time / lidar_centers / qr_centers` 三行 block），并生成 `single_calib_result.txt`（FAST-LIVO2 格式外参 + 相机内参）、`colored_cloud.pcd`、`qr_detect.png`。
+`--pointcloud` 传单个 `.pcd` 就按单帧处理；传一个目录就非递归扫该目录下所有 `.pcd`、按文件名
+升序全部累加合并成一份点云再检测（不做降采样/截断，靠检测算法内部的 `auto_roi_voxel_leaf`/
+`annulus_voxel_leaf` 兜底）。跑完后**追加**写入 `<output_dir>/circle_center_record.txt`，并生成
+`single_calib_result.txt`（FAST-LIVO2 格式外参 + 相机内参）、`colored_cloud.pcd`、`qr_detect.png`，
+`DEBUG=1`（默认开）时还会落盘 8 个 `debug_*.pcd` 中间点云（原来是发布到 RViz，现在是文件）。
 
 攒够 ≥3 个场景（对应标定板摆在车前左/正中/右，`pics/multi-scene.jpg`）后跑联合标定：
 
 ```bash
-roslaunch fast_calib multi_calib.launch
+./build/multi_fast_calib -o <same_output_dir>
 ```
 
-`multi_scene.cpp` 固定**只取 `circle_center_record.txt` 里最后 3 个 block**做加权 SVD，输出 `multi_calib_result.txt`。
+`multi_scene.cpp` 固定**只取 `circle_center_record.txt` 里最后 3 个 block**做加权 SVD，输出
+`multi_calib_result.txt`。
 
-LiDAR-only 调参（不需要图像，直接吃 bag + topic，命令行传参覆盖 `bag_path`/`lidar_topic`）：
+LiDAR-only 调参（不需要图像/相机参数，直接吃点云）：
 
 ```bash
-rosparam load config/qr_params.yaml /
-rosrun fast_calib lidar_center_test <bag_path> <lidar_topic> [auto|solid|mech]
+./build/lidar_center_test \
+  --pointcloud <path/to/frame.pcd 或 folder/> \
+  --settings config/qr_params.yaml \
+  -o <output_dir> \
+  [--lidar-type auto|solid|mech]
 ```
 
-输出 `<prefix>_centers.txt`（4 个环心坐标）和 `<prefix>_debug_cloud.pcd`（按 intensity 伪彩色的板点云 + 绿色 annulus 点 + 红色边界点 + 白色圆心球标记，可直接拖进 `pcl_viewer`/CloudCompare 看检测效果），比跑整套 `fast_calib` 快得多，调 LiDAR 侧阈值时优先用这个。
+输出 `<prefix>_centers.txt`（4 个环心坐标）和 `<prefix>_debug_cloud.pcd`，比跑整套 `fast_calib`
+快得多，调 LiDAR 侧阈值时优先用这个。
 
 `calib_data/`、`output/`、`build/` 都在 `.gitignore` 里，不要把跑出来的数据/结果当代码提交。
 
@@ -108,17 +124,6 @@ include/common_lib.h      Common::Point（XYZ+intensity+ring，PCL_NO_PRECOMPILE
 - `saveTargetHoleCenters`（`common_lib.h:244`）以 **追加（`ios::app`）** 方式写 `circle_center_record.txt`——这是单场景与多场景之间唯一的数据交接点，多场景标定不重新跑检测，只读这个文本文件。
 - 单场景外参写 `single_calib_result.txt`，多场景写 `multi_calib_result.txt`，两者都是人手写的 **FAST-LIVO2 格式**（`Rcl`/`Pcl` 三行矩阵文本，非 YAML/JSON，改格式时要注意下游是否有解析脚本依赖这个格式）。
 - `DEBUG=1`（`common_lib.h:37`）时 `main.cpp` 主循环会持续发布一堆中间点云到 RViz topic（`filtered_cloud`/`plane_cloud`/`annulus_cloud`/...），配 `rviz_cfg/fast_livo2.rviz` 用；关掉这些发布不影响标定结果，纯调试用。
-
-## 去 ROS 化耦合点
-
-去 ROS 化时需要重点处理、当前散落在各文件里的 ROS 依赖：
-
-- **参数输入**：`Params` 只能从 `ros::NodeHandle::param` 读（`common_lib.h:76-111`），没有独立的 YAML 解析或 CLI 解析路径。
-- **点云输入**：`data_preprocess.hpp` 和 `lidar_center_test.cpp` 里各自独立实现了一遍 `rosbag::Bag` + `rosbag::View` + `TopicQuery` 解析（Livox `livox_ros_driver::CustomMsg` 和标准 `sensor_msgs::PointCloud2` 两条分支），逻辑重复、且强依赖 `rosbag`/`pcl_conversions`/`sensor_msgs` 几个 ROS 包。
-- **日志**：直接用 `ROS_INFO`/`ROS_WARN`/`ROS_ERROR`/`ROS_ERROR_STREAM`（未封装成 shim 宏），全仓库到处都是，替换量大。
-- **可视化**：`LidarDetect` 内部持有一堆 `ros::Publisher` 成员，`main.cpp` 主循环靠 `ros::Rate` + `ros::spinOnce` 常驻发布 RViz 消息。
-- **消息类型互转**：`pcl::toROSMsg`/`pcl_ros` 依赖贯穿 `main.cpp` 输出逻辑。
-- **构建系统**：`CMakeLists.txt` 走 `find_package(catkin REQUIRED COMPONENTS ...)` + `catkin_package()`，整体挂在 catkin 元编译系统下，不是独立 CMake 工程。
 
 ## 编码约定
 
