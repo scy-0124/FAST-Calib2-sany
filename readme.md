@@ -29,3 +29,24 @@
   的自动 ROI 提取在这批点云上找不到足够的高反光聚类（单帧场景为 0 个，27 帧文件夹合并场景为 3 个），凑不出
   4 个圆心——这是标定板反射率/ROI 阈值跟这批数据不匹配的调参问题，不是这次去ROS化引入的代码缺陷，但会影响
   之后有人拿这批数据实跑标定的预期（不会跑出真实的4个圆心结果），需要后续单独调参解决。
+
+## 2026-07-02
+
+- "去 ROS 化"10 个实施任务全部完成并逐个通过 task-scoped code review（每个任务都有实现+审查
+  两轮，累计对 5 个任务的审查发现做过修复），随后做了一次最终整支分支 review（`8cc01d6..4ff1219`，
+  14 个 commit），发现并修复：
+  - **Important**：`fast_calib` 在 QR/LiDAR 检测数量不足 4 个（标定实质失败）时，此前仍会
+    `return 0` 并把无意义的外参写进 `single_calib_result.txt`，跟 `lidar_center_test` 早已建立的
+    "检测失败用非 0 退出码报告"约定不一致，可能让用 `$?` 判断标定是否成功的下游脚本/CI 把"彻底失败"
+    误判为成功。已修复：检测数量不足时打印错误并 `return 1`，不再落盘垃圾结果。
+  - 清理了去 ROS 化完成后已经彻底死掉、但仍被 git 跟踪的 ROS 遗留文件：`launch/calib.launch`、
+    `launch/multi_calib.launch`、`rviz_cfg/fast_livo2.rviz`、`include/CustomMsg.h`、
+    `include/CustomPoint.h`（均已确认无任何源文件引用）。
+  - 更新了项目主 `README.md`（原上游英文文档）的 Prerequisites/Run Examples/Standalone LiDAR
+    Center Extraction Test 三节，把 `roslaunch`/`rosrun`/`rosparam`/`.bag` 相关的旧运行说明换成
+    新的 `./build/fast_calib --image ... --pointcloud ... -c ... -o ...` 等 CLI 用法，与 `CLAUDE.md`
+    保持一致。
+- 最终 review 里还记录了几条不影响合并、留作后续跟进的 Minor 项：`common_lib.h` 的
+  `loadSettingsYaml` 字段类型写错时会 `std::terminate` 而非优雅报错退出；`lidar_center_test` 不校验
+  `--lidar-type` 取值合法性；三个可执行文件的参数错误处理风格（退出码/措辞）不完全统一；
+  `lidar_center_test.cpp` 里个别函数形参仍叫 `bag_path`（语义上已经不准确，纯命名遗留）。
