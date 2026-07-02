@@ -7,29 +7,23 @@ which is included as part of this source code package.
 
 #ifndef QR_DETECT_HPP
 #define QR_DETECT_HPP
-#include <cv_bridge/cv_bridge.h>
-#include <image_geometry/pinhole_camera_model.h>
-#include <message_filters/subscriber.h>
-#include <message_filters/time_synchronizer.h>
-#include <ros/ros.h>
 #include <opencv2/aruco.hpp>
 #include "common_lib.h"
 
-class QRDetect 
+class QRDetect
 {
   private:
     double marker_size_, delta_width_qr_center_, delta_height_qr_center_;
     double delta_width_circles_, delta_height_circles_;
     int min_detected_markers_;
     cv::Ptr<cv::aruco::Dictionary> dictionary_;
-  
+
   public:
-    ros::Publisher qr_pub_;
     cv::Mat imageCopy_;
     cv::Mat cameraMatrix_;
     cv::Mat distCoeffs_;
 
-    QRDetect(ros::NodeHandle &nh, Params& params) 
+    QRDetect(Params& params)
     {
       marker_size_ = params.marker_size;
       delta_width_qr_center_ = params.delta_width_qr_center;
@@ -37,19 +31,17 @@ class QRDetect
       delta_width_circles_ = params.delta_width_circles;
       delta_height_circles_ = params.delta_height_circles;
       min_detected_markers_ = params.min_detected_markers;
-      
+
       // Initialize camera matrix
       cameraMatrix_ = (cv::Mat_<float>(3, 3) << params.fx, 0, params.cx,
                                                 0, params.fy, params.cy,
                                                 0,         0,        1);
-                                                
+
       // Initialize distortion coefficients
       distCoeffs_ = (cv::Mat_<float>(1, 5) << params.k1, params.k2, params.p1, params.p2, 0);
 
       // Initialize QR dictionary
       dictionary_ = cv::aruco::getPredefinedDictionary(cv::aruco::DICT_6X6_250);
-
-      qr_pub_ = nh.advertise<sensor_msgs::PointCloud2>("qr_cloud", 1);
     }
 
     Point2f projectPointDist(cv::Point3f pt_cv, const Mat intrinsics, const Mat distCoeffs) 
@@ -187,8 +179,10 @@ class QRDetect
           double y = tvecs[i][1];
           double z = tvecs[i][2];
 
+    #if (CV_MAJOR_VERSION == 3 && CV_MINOR_VERSION <= 2) || CV_MAJOR_VERSION < 3
           cv::aruco::drawAxis(imageCopy_, cameraMatrix_, distCoeffs_, rvecs[i],
                               tvecs[i], 0.1);
+    #endif
 
           // Accumulate pose for initial guess
           tvec[0] += tvecs[i][0];
@@ -227,7 +221,9 @@ class QRDetect
 
         // cout << "board: " <<  tvec[0] << ", "<< tvec[1] << ", " << tvec[2] << std::endl;
 
+    #if (CV_MAJOR_VERSION == 3 && CV_MINOR_VERSION <= 2) || CV_MAJOR_VERSION < 3
         cv::aruco::drawAxis(imageCopy_, cameraMatrix_, distCoeffs_, rvec, tvec, 0.2);
+    #endif
 
         // Build transformation matrix to calibration target axis
         cv::Mat R(3, 3, cv::DataType<float>::type);
