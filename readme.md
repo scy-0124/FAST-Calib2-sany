@@ -46,6 +46,17 @@
     Center Extraction Test 三节，把 `roslaunch`/`rosrun`/`rosparam`/`.bag` 相关的旧运行说明换成
     新的 `./build/fast_calib --image ... --pointcloud ... -c ... -o ...` 等 CLI 用法，与 `CLAUDE.md`
     保持一致。
+- PR 建好后用真实生产数据（Taijia_001 另一批场景 + 用户自备的 vehicle_config camera.yaml +
+  手动指定的 LiDAR ROI）实测：QR 侧检测完全成功（4/4 标记，几何 RMSE ~1e-5 mm），LiDAR 侧凑到了
+  半径完全匹配的环但没凑够 4 个，`fast_calib` 正确报错退出（验证了上面那条 Important 修复在真实
+  失败场景下确实生效：退出码 1、不落盘垃圾结果）。测试中发现新问题：`fast_calib` 检测失败时会在
+  写 7 个 LiDAR 过程调试点云（`debug_filtered/plane/annulus/boundary/aligned/edge/center_z0_cloud.pcd`）
+  **之前**就已经 `return 1` 退出，导致失败时反而看不到任何调试点云——而这几个过程点云本来就只依赖
+  `LidarDetect` 自身的检测流水线、不依赖 QR-LiDAR 是否配对成功。已修复：把这 7 个的落盘代码挪到
+  检测数量校验之前，不管最终成功与否都会落盘（落盘路径仍是用户传入的 `-o` 目录，没有新增参数）；
+  只有依赖 SVD 外参才能算出来的 `debug_aligned_lidar_centers.pcd` 继续保持只在成功时落盘。
+  `lidar_center_test` 本来就是"无论成功失败都落盘调试点云"的设计（专门给 LiDAR 侧调参用），
+  确认过不需要改。
 - 最终 review 里还记录了几条不影响合并、留作后续跟进的 Minor 项：`common_lib.h` 的
   `loadSettingsYaml` 字段类型写错时会 `std::terminate` 而非优雅报错退出；`lidar_center_test` 不校验
   `--lidar-type` 取值合法性；三个可执行文件的参数错误处理风格（退出码/措辞）不完全统一；
