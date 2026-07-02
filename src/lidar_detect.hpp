@@ -20,6 +20,19 @@ which is included as part of this source code package.
 
 class LidarDetect
 {
+public:
+    // 单个候选聚类的调试信息：聚类原始点 + 圆拟合结果，供 main/测试入口落盘可视化，不参与检测逻辑本身
+    struct ClusterFitDebug
+    {
+        pcl::PointCloud<pcl::PointXYZ>::Ptr points;  // 该聚类在对齐坐标系（板面 Z=0 平面）下的原始点
+        bool fit_ok = false;      // 圆拟合本身是否收敛成功
+        bool accepted = false;    // 是否通过半径/误差/去重等筛选，成为最终候选圆心
+        double center_x = 0.0;
+        double center_y = 0.0;
+        double inner_radius = 0.0;  // 单圆拟合（solid 主路径）时 inner_radius == outer_radius == radius
+        double outer_radius = 0.0;
+    };
+
 private:
     double x_min_, x_max_, y_min_, y_max_, z_min_, z_max_;
     double circle_radius_, annulus_half_width_, delta_width_circles_, delta_height_circles_;
@@ -35,6 +48,9 @@ private:
     pcl::PointCloud<pcl::PointXYZ>::Ptr aligned_cloud_;
     pcl::PointCloud<pcl::PointXYZ>::Ptr edge_cloud_;
     pcl::PointCloud<pcl::PointXYZ>::Ptr center_z0_cloud_;
+    // 最近一次实际生效（胜出）的聚类/圆拟合调试记录；fit* 函数内部会被 mutable 写入，
+    // detect_mech_lidar/detect_solid_lidar 在多次尝试间会显式挑选胜出的一份覆盖回来。
+    mutable std::vector<ClusterFitDebug> last_cluster_fit_records_;
 
     struct CircleFitResult
     {
@@ -1301,6 +1317,7 @@ private:
         aligned_cloud_->clear();
         edge_cloud_->clear();
         center_z0_cloud_->clear();
+        last_cluster_fit_records_.clear();
         center_cloud->clear();
     }
 
@@ -1567,6 +1584,8 @@ private:
     {
         candidate_centers->clear();
         candidate_centers->reserve(cluster_indices.size());
+        last_cluster_fit_records_.clear();
+        last_cluster_fit_records_.reserve(cluster_indices.size());
 
         for (size_t i = 0; i < cluster_indices.size(); ++i)
         {
@@ -1576,12 +1595,22 @@ private:
                 cluster->push_back(edge_cloud_->points[idx]);
             }
 
+            ClusterFitDebug record;
+            record.points = cluster;
+
             CircleFitResult fit;
             if (!fitCircleRobust(cluster, fit))
             {
                 ROS_WARN("[LiDAR] Annulus fit failed for cluster %zu with %zu points.", i, cluster->size());
+                last_cluster_fit_records_.push_back(record);
                 continue;
             }
+
+            record.fit_ok = true;
+            record.center_x = fit.x;
+            record.center_y = fit.y;
+            record.inner_radius = fit.radius;
+            record.outer_radius = fit.radius;
 
             const bool radius_ok = std::fabs(fit.radius - circle_radius_) < 0.05;
             const bool error_ok = fit.mean_abs_error < 0.03;
@@ -1591,6 +1620,7 @@ private:
             if (!radius_ok || !error_ok)
             {
                 ROS_WARN("[LiDAR] Reject cluster %zu: radius_ok=%d, error_ok=%d.", i, radius_ok, error_ok);
+                last_cluster_fit_records_.push_back(record);
                 continue;
             }
 
@@ -1599,6 +1629,8 @@ private:
             center_point.y = static_cast<float>(fit.y);
             center_point.z = 0.0f;
             candidate_centers->push_back(center_point);
+            record.accepted = true;
+            last_cluster_fit_records_.push_back(record);
         }
     }
 
@@ -1608,6 +1640,8 @@ private:
     {
         candidate_centers->clear();
         candidate_centers->reserve(cluster_indices.size());
+        last_cluster_fit_records_.clear();
+        last_cluster_fit_records_.reserve(cluster_indices.size());
 
         for (size_t i = 0; i < cluster_indices.size(); ++i)
         {
@@ -1618,6 +1652,9 @@ private:
                 cluster->push_back(edge_cloud_->points[idx]);
             }
 
+            ClusterFitDebug record;
+            record.points = cluster;
+
             ConcentricCircleFitResult fit;
             const double inner_radius = std::max(0.02, circle_radius_ - annulus_half_width_);
             const double outer_radius = circle_radius_ + annulus_half_width_;
@@ -1625,8 +1662,15 @@ private:
             {
                 ROS_WARN("[LiDAR] Concentric annulus fit failed for cluster %zu with %zu boundary points.",
                          i, cluster->size());
+                last_cluster_fit_records_.push_back(record);
                 continue;
             }
+
+            record.fit_ok = true;
+            record.center_x = fit.x;
+            record.center_y = fit.y;
+            record.inner_radius = fit.inner_radius;
+            record.outer_radius = fit.outer_radius;
 
             const bool error_ok = fit.rmse < 0.025;
             const bool width_ok = (fit.outer_radius - fit.inner_radius) > 0.006 &&
@@ -1640,6 +1684,7 @@ private:
             {
                 ROS_WARN("[LiDAR] Reject concentric cluster %zu: error_ok=%d, width_ok=%d.",
                          i, error_ok, width_ok);
+                last_cluster_fit_records_.push_back(record);
                 continue;
             }
 
@@ -1660,7 +1705,9 @@ private:
             if (!duplicate)
             {
                 candidate_centers->push_back(center_point);
+                record.accepted = true;
             }
+            last_cluster_fit_records_.push_back(record);
         }
 
         ROS_INFO("[LiDAR] Concentric annulus center candidates: %zu", candidate_centers->size());
@@ -1715,6 +1762,8 @@ private:
         candidate_centers->clear();
         boundary_edge_cloud->clear();
         candidate_centers->reserve(cluster_indices.size());
+        last_cluster_fit_records_.clear();
+        last_cluster_fit_records_.reserve(cluster_indices.size());
 
         const double inner_radius = std::max(0.02, circle_radius_ - annulus_half_width_);
         const double outer_radius = circle_radius_ + annulus_half_width_;
@@ -1733,16 +1782,29 @@ private:
             {
                 ROS_WARN("[LiDAR] Solid boundary extraction failed for cluster %zu with %zu points.",
                          i, cluster->size());
+                ClusterFitDebug record;
+                record.points = cluster;
+                last_cluster_fit_records_.push_back(record);
                 continue;
             }
+
+            ClusterFitDebug record;
+            record.points = boundary_cloud;
 
             ConcentricCircleFitResult fit;
             if (!fitFixedRadiiConcentricCenterRobust(boundary_cloud, inner_radius, outer_radius, fit))
             {
                 ROS_WARN("[LiDAR] Solid boundary concentric fit failed for cluster %zu with %zu boundary points.",
                          i, boundary_cloud->size());
+                last_cluster_fit_records_.push_back(record);
                 continue;
             }
+
+            record.fit_ok = true;
+            record.center_x = fit.x;
+            record.center_y = fit.y;
+            record.inner_radius = fit.inner_radius;
+            record.outer_radius = fit.outer_radius;
 
             const bool error_ok = fit.rmse < 0.025;
             ROS_INFO("[LiDAR] Solid boundary cluster %zu: cluster=%zu, boundary=%zu, center=(%.4f, %.4f), radii=(%.4f, %.4f), mean abs=%.4f, rmse=%.4f",
@@ -1751,6 +1813,7 @@ private:
             if (!error_ok)
             {
                 ROS_WARN("[LiDAR] Reject solid boundary cluster %zu: rmse %.4f.", i, fit.rmse);
+                last_cluster_fit_records_.push_back(record);
                 continue;
             }
 
@@ -1760,6 +1823,8 @@ private:
             center_point.z = 0.0f;
             candidate_centers->push_back(center_point);
             *boundary_edge_cloud += *boundary_cloud;
+            record.accepted = true;
+            last_cluster_fit_records_.push_back(record);
         }
 
         ROS_INFO("[LiDAR] Solid boundary concentric center candidates: %zu", candidate_centers->size());
@@ -1875,6 +1940,7 @@ public:
             std::vector<int> selected_indices;
             pcl::PointCloud<Common::Point>::Ptr annulus_original_cloud;
             pcl::PointCloud<pcl::PointXYZ>::Ptr edge_cloud;
+            std::vector<ClusterFitDebug> cluster_fit_records;
         };
 
         auto run_mechanical_fit = [&](bool interpolate_boundary) -> MechanicalFitAttempt
@@ -1894,6 +1960,7 @@ public:
             clusterMechanicalAnnulusBoundaryCloud(cluster_indices);
 
             fitConcentricAnnulusCentersFromClusters(cluster_indices, attempt.candidate_centers);
+            attempt.cluster_fit_records = last_cluster_fit_records_;
             if (!selectGeometryConsistentCentersByDistances(attempt.candidate_centers,
                                                             attempt.selected_indices,
                                                             0.035))
@@ -1937,6 +2004,7 @@ public:
 
         *annulus_original_cloud_ = *(best_attempt->annulus_original_cloud);
         *edge_cloud_ = *(best_attempt->edge_cloud);
+        last_cluster_fit_records_ = best_attempt->cluster_fit_records;
         ROS_INFO("[LiDAR] Mechanical concentric centers selected with geometry max error %.2f mm.",
                  best_attempt->geometry_error * 1000.0);
         transformCentersBackToLidar(best_attempt->candidate_centers,
@@ -1970,6 +2038,7 @@ public:
 
         pcl::PointCloud<pcl::PointXYZ>::Ptr candidate_centers(new pcl::PointCloud<pcl::PointXYZ>);
         fitAnnulusCentersFromClusters(cluster_indices, candidate_centers);
+        const std::vector<ClusterFitDebug> single_circle_cluster_records = last_cluster_fit_records_;
 
         std::vector<int> selected_indices;
         if (!selectGeometryConsistentCenters(candidate_centers, selected_indices))
@@ -1988,7 +2057,11 @@ public:
         fitSolidBoundaryConcentricCentersFromClusters(cluster_indices,
                                                       boundary_candidate_centers,
                                                       boundary_edge_cloud);
+        const std::vector<ClusterFitDebug> boundary_cluster_records = last_cluster_fit_records_;
         transformAlignedPointsBackToLidar(boundary_edge_cloud, alignment, boundary_original_cloud_);
+
+        // 默认沿用单圆拟合路线的聚类调试记录；下面命中"边界同心圆更优"分支时再覆盖。
+        last_cluster_fit_records_ = single_circle_cluster_records;
 
         std::vector<int> boundary_selected_indices;
         if (selectGeometryConsistentCenters(boundary_candidate_centers, boundary_selected_indices))
@@ -2004,6 +2077,7 @@ public:
                 ROS_INFO("[LiDAR] Use solid boundary concentric centers.");
                 candidate_centers = boundary_candidate_centers;
                 selected_indices = boundary_selected_indices;
+                last_cluster_fit_records_ = boundary_cluster_records;
             }
         }
         else
@@ -2030,6 +2104,8 @@ public:
     pcl::PointCloud<pcl::PointXYZ>::Ptr getEdgeCloud() const { return edge_cloud_; }
     // 获取 Z=0 平面上的 annulus 中心
     pcl::PointCloud<pcl::PointXYZ>::Ptr getCenterZ0Cloud() const { return center_z0_cloud_; }
+    // 获取最终生效（胜出）那一次尝试的聚类候选 + 圆拟合调试记录，用于逐个聚类落盘可视化
+    const std::vector<ClusterFitDebug>& getLastClusterFitRecords() const { return last_cluster_fit_records_; }
 };
 
 typedef std::shared_ptr<LidarDetect> LidarDetectPtr;

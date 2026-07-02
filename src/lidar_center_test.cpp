@@ -10,6 +10,8 @@ LiDAR-only batch test entry for target annulus center extraction.
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cmath>
+#include <cstdio>
 #include <fstream>
 #include <pcl/io/pcd_io.h>
 #include <pcl/filters/impl/extract_indices.hpp>
@@ -190,6 +192,155 @@ void addCenterMarker(const pcl::PointXYZ& center,
                      pcl::PointCloud<pcl::PointXYZRGB>::Ptr output)
 {
     addSphereMarker(center, 0.040f, 0.006f, color, output);
+}
+
+// 通用落盘：把某一条流水线中间点云原样存成 pcd，空点云直接跳过（不当作错误）
+template <typename PointT>
+bool savePipelineCloud(const std::string& dir, const std::string& name,
+                       const typename pcl::PointCloud<PointT>::Ptr& cloud)
+{
+    if (!cloud || cloud->empty()) return false;
+    const std::string path = dir + "/" + name;
+    if (pcl::io::savePCDFileBinaryCompressed(path, *cloud) != 0)
+    {
+        ROS_ERROR_STREAM("[LiDAR Test] Failed to save pipeline stage: " << path);
+        return false;
+    }
+    std::cout << "[LiDAR Test] Saved pipeline stage: " << path
+              << " (" << cloud->size() << " points)" << std::endl;
+    return true;
+}
+
+// 在 (cx, cy, z) 处生成一圈拟合圆环采样点，用于圆拟合结果可视化
+void addCircleRing(double cx, double cy, double radius, float z,
+                   const std::array<std::uint8_t, 3>& color,
+                   pcl::PointCloud<pcl::PointXYZRGB>::Ptr output,
+                   int num_points = 240)
+{
+    if (radius <= 0.0) return;
+    for (int i = 0; i < num_points; ++i)
+    {
+        const double theta = 2.0 * M_PI * static_cast<double>(i) / static_cast<double>(num_points);
+        output->push_back(makeRgbPoint(static_cast<float>(cx + radius * std::cos(theta)),
+                                       static_cast<float>(cy + radius * std::sin(theta)),
+                                       z, color[0], color[1], color[2]));
+    }
+}
+
+// 落盘每个候选聚类的原始点（对齐坐标系），按结局着色：绿=被采纳为候选圆心，
+// 黄=圆拟合成功但被半径/误差/去重等门限剔除，红=圆拟合本身没收敛
+void saveClusterClouds(const std::vector<LidarDetect::ClusterFitDebug>& records, const std::string& dir)
+{
+    for (size_t i = 0; i < records.size(); ++i)
+    {
+        const auto& rec = records[i];
+        if (!rec.points || rec.points->empty()) continue;
+
+        std::array<std::uint8_t, 3> color;
+        const char* status = "fit_failed";
+        if (rec.accepted) { color = {{40, 220, 40}}; status = "accepted"; }
+        else if (rec.fit_ok) { color = {{230, 200, 40}}; status = "fit_ok_rejected"; }
+        else { color = {{220, 40, 40}}; }
+
+        pcl::PointCloud<pcl::PointXYZRGB>::Ptr colored(new pcl::PointCloud<pcl::PointXYZRGB>);
+        colored->reserve(rec.points->size());
+        for (const auto& p : *rec.points)
+        {
+            colored->push_back(makeRgbPoint(p.x, p.y, p.z, color[0], color[1], color[2]));
+        }
+        colored->width = static_cast<uint32_t>(colored->size());
+        colored->height = 1;
+        colored->is_dense = false;
+
+        char name[64];
+        std::snprintf(name, sizeof(name), "07_cluster_%02zu.pcd", i);
+        const std::string path = dir + "/" + name;
+        if (pcl::io::savePCDFileBinaryCompressed(path, *colored) == 0)
+        {
+            std::cout << "[LiDAR Test] Saved pipeline stage: " << path
+                      << " (" << colored->size() << " points, " << status << ")" << std::endl;
+        }
+    }
+}
+
+// 落盘每个圆拟合成功的聚类可视化：原始点(灰) + 拟合圆环(青=内圈/单圆, 品红=外圈) + 圆心标记
+// (白=被采纳, 橙=被剔除)。圆拟合本身失败的聚类没有圆可画，跳过。
+void saveCircleFitVisualizations(const std::vector<LidarDetect::ClusterFitDebug>& records, const std::string& dir)
+{
+    for (size_t i = 0; i < records.size(); ++i)
+    {
+        const auto& rec = records[i];
+        if (!rec.fit_ok || !rec.points || rec.points->empty()) continue;
+
+        pcl::PointCloud<pcl::PointXYZRGB>::Ptr viz(new pcl::PointCloud<pcl::PointXYZRGB>);
+        const std::array<std::uint8_t, 3> point_color = {{120, 120, 130}};
+        viz->reserve(rec.points->size() + 500);
+        for (const auto& p : *rec.points)
+        {
+            viz->push_back(makeRgbPoint(p.x, p.y, p.z, point_color[0], point_color[1], point_color[2]));
+        }
+
+        const std::array<std::uint8_t, 3> inner_color = {{40, 220, 220}};
+        const std::array<std::uint8_t, 3> outer_color = {{220, 40, 220}};
+        if (rec.inner_radius > 0.0 && std::fabs(rec.outer_radius - rec.inner_radius) > 1e-6)
+        {
+            addCircleRing(rec.center_x, rec.center_y, rec.inner_radius, 0.0f, inner_color, viz);
+            addCircleRing(rec.center_x, rec.center_y, rec.outer_radius, 0.0f, outer_color, viz);
+        }
+        else
+        {
+            addCircleRing(rec.center_x, rec.center_y, rec.outer_radius, 0.0f, inner_color, viz);
+        }
+
+        const std::array<std::uint8_t, 3> center_color =
+            rec.accepted ? std::array<std::uint8_t, 3>{{255, 255, 255}}
+                        : std::array<std::uint8_t, 3>{{255, 140, 0}};
+        addSphereMarker(pcl::PointXYZ(static_cast<float>(rec.center_x), static_cast<float>(rec.center_y), 0.0f),
+                        0.020f, 0.004f, center_color, viz);
+
+        viz->width = static_cast<uint32_t>(viz->size());
+        viz->height = 1;
+        viz->is_dense = false;
+
+        char name[64];
+        std::snprintf(name, sizeof(name), "08_circle_fit_%02zu.pcd", i);
+        const std::string path = dir + "/" + name;
+        if (pcl::io::savePCDFileBinaryCompressed(path, *viz) == 0)
+        {
+            std::cout << "[LiDAR Test] Saved pipeline stage: " << path << std::endl;
+        }
+    }
+}
+
+// 无论最终检测成功与否，都把完整流水线的中间点云落盘，命名按 00_/01_/... 表示产生的先后顺序，
+// 方便定位到底是哪一步丢的点。落盘路径复用现有 -o 输出目录，按点云前缀单独建一个子目录归档，
+// 不新增 CLI 参数。聚类/圆拟合数据依赖 LidarDetect::getLastClusterFitRecords()，取的是最终
+// 实际生效（胜出）那一次尝试的记录，不是每次内部重试都留痕。
+void savePipelineStages(const pcl::PointCloud<Common::Point>::Ptr& raw_cloud,
+                        const LidarDetect& lidar_detect,
+                        const Params& params,
+                        const std::string& pointcloud_path)
+{
+    const std::string output_dir = resolveOutputDirectory(params);
+    const std::string dir = output_dir + "/" + outputPrefixForPointcloud(pointcloud_path) + "_pipeline";
+    ensureDirectory(dir);
+
+    savePipelineCloud<Common::Point>(dir, "00_raw_cloud.pcd", raw_cloud);
+    savePipelineCloud<Common::Point>(dir, "01_roi_filtered.pcd", lidar_detect.getFilteredCloud());
+    savePipelineCloud<Common::Point>(dir, "02_plane_cloud.pcd", lidar_detect.getPlaneCloud());
+    savePipelineCloud<pcl::PointXYZ>(dir, "03_aligned_plane.pcd", lidar_detect.getAlignedCloud());
+    savePipelineCloud<Common::Point>(dir, "04_annulus_original.pcd", lidar_detect.getAnnulusOriginalCloud());
+    savePipelineCloud<pcl::PointXYZ>(dir, "05_boundary_original.pcd", lidar_detect.getBoundaryOriginalCloud());
+    savePipelineCloud<pcl::PointXYZ>(dir, "06_edge_aligned.pcd", lidar_detect.getEdgeCloud());
+
+    const auto& records = lidar_detect.getLastClusterFitRecords();
+    saveClusterClouds(records, dir);
+    saveCircleFitVisualizations(records, dir);
+
+    savePipelineCloud<pcl::PointXYZ>(dir, "09_center_z0.pcd", lidar_detect.getCenterZ0Cloud());
+
+    std::cout << "[LiDAR Test] Pipeline stage dump directory: " << dir
+              << " (" << records.size() << " candidate clusters)" << std::endl;
 }
 
 // 保存调试 PCD：板子按 intensity 着色，annulus 为绿色，边界为红色，圆心为白色
@@ -633,6 +784,7 @@ int main(int argc, char** argv)
     saveDebugCloud(lidar_detect.getPlaneCloud(), lidar_detect.getAnnulusOriginalCloud(),
                    lidar_detect.getBoundaryOriginalCloud(),
                    centers, params, pointcloud_path);
+    savePipelineStages(cloud, lidar_detect, params, pointcloud_path);
 
     return centers->size() == TARGET_NUM_CIRCLES ? 0 : 1;
 }

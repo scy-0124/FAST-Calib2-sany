@@ -61,3 +61,26 @@
   `loadSettingsYaml` 字段类型写错时会 `std::terminate` 而非优雅报错退出；`lidar_center_test` 不校验
   `--lidar-type` 取值合法性；三个可执行文件的参数错误处理风格（退出码/措辞）不完全统一；
   `lidar_center_test.cpp` 里个别函数形参仍叫 `bag_path`（语义上已经不准确，纯命名遗留）。
+- `lidar_center_test` 新增完整检测流水线中间点云落盘（`src/lidar_detect.hpp` + `src/lidar_center_test.cpp`）：
+  之前只落盘 `plane`/`annulus`/`boundary`/最终圆心合成的一份 `debug_cloud.pcd`，聚类候选和逐个圆拟合
+  结果完全看不到。现在无论最终 4 个圆心是否凑齐，都会在 `-o` 输出目录下按点云前缀建一个
+  `<prefix>_pipeline/` 子目录（不新增 CLI 参数），把流水线每一步按产生顺序落盘：
+  `00_raw_cloud`（原始输入点云）→ `01_roi_filtered`（ROI 裁剪后）→ `02_plane_cloud`（平面 RANSAC 内点）→
+  `03_aligned_plane`（对齐到 Z=0 后的板面）→ `04_annulus_original`（原始坐标系高反 annulus/边界点）→
+  `05_boundary_original`（仅 solid 路径会有内容，mech 路径始终为空——mech 走的是 04/06 这条线）→
+  `06_edge_aligned`（对齐坐标系、送入聚类前的降采样边界点）→ `07_cluster_NN`（每个候选聚类原始点，
+  绿色=被采纳为候选圆心/黄色=圆拟合成功但被半径或误差门限剔除/红色=圆拟合本身没收敛）→
+  `08_circle_fit_NN`（每个圆拟合成功的聚类叠加拟合圆环可视化：灰=聚类点，青/品红=拟合内外圆环，
+  白/橙=圆心，橙表示该候选后来被剔除）→ `09_center_z0`（Z=0 平面上最终选中的圆心，仅成功时有）。
+  空点云（比如 mech 数据下的 `05_boundary_original`，或检测在更早步骤就失败导致后续阶段从未产生）
+  直接跳过不写文件，不当错误。`lidar_detect.hpp` 侧新增了 `LidarDetect::ClusterFitDebug`
+  结构体和 `getLastClusterFitRecords()` getter，纯增量式在三处圆拟合函数
+  （`fitAnnulusCentersFromClusters`/`fitConcentricAnnulusCentersFromClusters`/
+  `fitSolidBoundaryConcentricCentersFromClusters`）内部记录聚类点+拟合结果，不改动任何检测判定逻辑；
+  由于 `detect_mech_lidar`/`detect_solid_lidar` 内部同一批聚类函数可能被调用两次（插值边界 vs
+  高反侧边界；单圆 vs 边界同心圆），额外加了一层"每次尝试快照、最后按实际胜出的那次结果覆盖回成员变量"
+  的逻辑，确保落盘看到的聚类/圆拟合数据跟最终选用的那次尝试一致，不会张冠李戴。用真实 Taijia_001
+  mech 数据（`front_jt128` 文件夹合并 + 手动 ROI）实跑验证：高反侧尝试聚出 2 个候选聚类且都被采纳
+  （最终仍因只有 2/4 圆心而按预期返回退出码 1），成功落盘 `00/01/02/03/04/06` + 2 份
+  `07_cluster_*`/`08_circle_fit_*`，`05_boundary_original`/`09_center_z0` 正确留空；另用自动 ROI 在
+  更早的高反聚类阶段就失败的单帧数据验证了"检测在很早就失败时只落盘 `00_raw_cloud`，不崩溃"。
