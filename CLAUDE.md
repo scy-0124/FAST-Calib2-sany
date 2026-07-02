@@ -93,18 +93,17 @@ main.cpp              单场景入口：DataPreprocess 加载数据 → QRDetect
                        → sortPatternCenters 统一排序 → validateTargetGeometry 几何校验
                        → pcl SVD 求 T_cam_lidar → 写 circle_center_record.txt / single_calib_result.txt
 multi_scene.cpp        多场景入口：解析 circle_center_record.txt 最后 3 个 block → 自实现加权 SVD（非 pcl）
-lidar_center_test.cpp  LiDAR-only 调参入口：直接读 bag，只跑 LidarDetect，另存调试点云/圆心
+lidar_center_test.cpp  LiDAR-only 调参入口：--pointcloud 读 PCD 单帧/文件夹，只跑 LidarDetect，另存调试点云/圆心
 
 src/qr_detect.hpp        QRDetect：cv::aruco 检测 4 个标记 → estimatePoseBoard 求板位姿
                           → 反推出相机系下 4 个虚拟环心坐标
 src/lidar_detect.hpp      LidarDetect：solid / mech 两条独立检测路径（~2000 行，全仓库最核心的算法文件）
-src/data_preprocess.hpp   DataPreprocess：构造即加载——cv::imread 读图像（与 bag 完全无关，需另外单独提供）
-                          + rosbag 按 lidar_topic 过滤全部消息、累加成一份点云（非单帧，是整段 bag 时间
-                          窗口内的多帧叠加，用于给稀疏点云"加密度"）；顺带按点云是否带 ring 字段判定
-                          LiDARType（Solid/Mech）
+src/data_preprocess.hpp   DataPreprocess：构造即加载——cv::imread 读图像 + pcd_io.hpp::loadPointCloudInput
+                          读点云（单帧 .pcd / 文件夹合并；后者按文件名升序累加多帧）；顺带按点云是否
+                          带 ring 字段判定 LiDARType（Solid/Mech）
 include/common_lib.h      Common::Point（XYZ+intensity+ring，PCL_NO_PRECOMPILE 自定义点类型）、Params
-                          结构体 + rosparam 加载、sortPatternCenters/validateTargetGeometry/computeRMSE/
-                          projectPointCloudToImage 等几何与 IO 工具函数
+                          结构体 + loadSettingsYaml（yaml-cpp）加载、sortPatternCenters/validateTargetGeometry/
+                          computeRMSE/projectPointCloudToImage 等几何与 IO 工具函数
 ```
 
 ### LiDAR 检测：solid vs mech
@@ -123,7 +122,7 @@ include/common_lib.h      Common::Point（XYZ+intensity+ring，PCL_NO_PRECOMPILE
 
 - `saveTargetHoleCenters`（`common_lib.h:244`）以 **追加（`ios::app`）** 方式写 `circle_center_record.txt`——这是单场景与多场景之间唯一的数据交接点，多场景标定不重新跑检测，只读这个文本文件。
 - 单场景外参写 `single_calib_result.txt`，多场景写 `multi_calib_result.txt`，两者都是人手写的 **FAST-LIVO2 格式**（`Rcl`/`Pcl` 三行矩阵文本，非 YAML/JSON，改格式时要注意下游是否有解析脚本依赖这个格式）。
-- `DEBUG=1`（`common_lib.h:37`）时 `main.cpp` 主循环会持续发布一堆中间点云到 RViz topic（`filtered_cloud`/`plane_cloud`/`annulus_cloud`/...），配 `rviz_cfg/fast_livo2.rviz` 用；关掉这些发布不影响标定结果，纯调试用。
+- `DEBUG=1`（`common_lib.h:38`）时会落盘 8 个 `debug_*.pcd` 中间点云文件（单场景 `fast_calib` 输出），包含 `filtered`/`plane`/`annulus`/`high_intensity`/`circle_candidates` 等阶段的点云、边界点、圆心标记，便于调试 LiDAR 检测效果；关掉 `DEBUG` 不影响标定结果，纯调试用。
 
 ## 编码约定
 
