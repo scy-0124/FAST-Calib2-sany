@@ -122,7 +122,7 @@ include/common_lib.h      Common::Point（XYZ+intensity+ring，PCL_NO_PRECOMPILE
 
 - `saveTargetHoleCenters`（`common_lib.h:244`）以 **追加（`ios::app`）** 方式写 `circle_center_record.txt`——这是单场景与多场景之间唯一的数据交接点，多场景标定不重新跑检测，只读这个文本文件。
 - 单场景外参写 `single_calib_result.txt`，多场景写 `multi_calib_result.txt`，两者都是人手写的 **FAST-LIVO2 格式**（`Rcl`/`Pcl` 三行矩阵文本，非 YAML/JSON，改格式时要注意下游是否有解析脚本依赖这个格式）。
-- `DEBUG=1`（`common_lib.h:38`）时会落盘 8 个 `debug_*.pcd` 中间点云文件（单场景 `fast_calib` 输出），包含 `filtered`/`plane`/`annulus`/`high_intensity`/`circle_candidates` 等阶段的点云、边界点、圆心标记，便于调试 LiDAR 检测效果；关掉 `DEBUG` 不影响标定结果，纯调试用。
+- `DEBUG=1`（`common_lib.h:38`）时会落盘 8 个 `debug_*.pcd` 中间点云文件（单场景 `fast_calib` 输出），包含 `filtered`/`plane`/`annulus`/`boundary`/`aligned`/`edge`/`center_z0`/`aligned_lidar_centers` 各阶段的点云、边界点、圆心标记，便于调试 LiDAR 检测效果；关掉 `DEBUG` 不影响标定结果，纯调试用。
 
 ## 编码约定
 
