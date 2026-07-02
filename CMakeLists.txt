@@ -22,3 +22,6 @@ endif()
 
 add_executable(fast_calib src/main.cpp)
 target_link_libraries(fast_calib ${PCL_LIBRARIES} ${OpenCV_LIBRARIES} yaml-cpp::yaml-cpp)
+
+add_executable(multi_fast_calib src/multi_scene.cpp)
+target_link_libraries(multi_fast_calib ${PCL_LIBRARIES} ${OpenCV_LIBRARIES} yaml-cpp::yaml-cpp)
