@@ -1,5 +1,4 @@
 
-#include <ros/ros.h>
 #include <Eigen/Dense>
 #include <fstream>
 #include <sstream>
@@ -10,7 +9,6 @@
 #include <sys/stat.h>
 #include <cmath>
 #include "common_lib.h"
-#include "data_preprocess.hpp"
 
 struct RigidResult 
 {
@@ -109,15 +107,24 @@ static bool parseCentersLine(const std::string& line, std::vector<Eigen::Vector3
 
 int main(int argc, char** argv)
 {
-    ros::init(argc, argv, "multi_fast_calib");
-    ros::NodeHandle nh;
-    Params params = loadParameters(nh);
+    std::string output_dir;
+    for (int i = 1; i < argc; ++i)
+    {
+        std::string arg = argv[i];
+        if ((arg == "-o" || arg == "--output") && i + 1 < argc)
+        {
+            output_dir = argv[++i];
+        }
+    }
+    if (output_dir.empty())
+    {
+        std::cerr << "Usage: " << argv[0] << " -o <output_dir>" << std::endl;
+        return 1;
+    }
+    while (!output_dir.empty() && output_dir.back() == '/') output_dir.pop_back();
 
-    if (params.output_path.back() != '/') params.output_path += '/';
-    std::string midtxt_path = params.output_path + "circle_center_record.txt";
-
-    if (params.output_path.back() != '/') params.output_path += '/';
-    std::string multi_output_path = params.output_path + "multi_calib_result.txt";
+    const std::string midtxt_path = output_dir + "/circle_center_record.txt";
+    const std::string multi_output_path = output_dir + "/multi_calib_result.txt";
 
     // 读取全部行
     std::ifstream fin(midtxt_path);

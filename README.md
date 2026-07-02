@@ -21,7 +21,7 @@ FAST-Calib2 extends [FAST-Calib](https://github.com/hku-mars/FAST-Calib) to LiDA
 
 ## 1. Prerequisites
 
-PCL>=1.8, OpenCV>=4.0.
+PCL>=1.8, OpenCV>=4.0, yaml-cpp.
 
 ## 2. Calibration Target
 
@@ -68,19 +68,25 @@ The final quality checks include center-to-center geometry error and annulus rad
 
 Prepare static acquisition data in the `calib_data` folder (Download the example data from [Google Drive](https://drive.google.com/drive/folders/1VnMCsGj3Gat7dxe6IION0SfS7jYNMw1g?usp=sharing)):
 
-- rosbag containing point cloud messages
+- a point cloud (single `.pcd` file, or a folder of `.pcd` files to merge)
 - corresponding image
+- camera intrinsics from a vehicle_config `camera.yaml` (see `-c`/`--camera` below)
 
 Run single-scene calibration:
 
 ```bash
-roslaunch fast_calib calib.launch
+./build/fast_calib \
+  --image <path/to/image.png> \
+  --pointcloud <path/to/frame.pcd or folder/> \
+  --settings config/qr_params.yaml \
+  -c <vehicle_config_dir> --camera <camera_name> \
+  -o <output_dir>
 ```
 
 After collecting at least three scenes, run multi-scene joint calibration:
 
 ```bash
-roslaunch fast_calib multi_calib.launch
+./build/multi_fast_calib -o <output_dir>
 ```
 
 Typical multi-scene target placement:
@@ -97,27 +103,20 @@ Typical multi-scene target placement:
 
 The repository also provides a LiDAR-only test tool for checking annulus center extraction before running full camera-LiDAR calibration.
 
-Load parameters:
-
-```bash
-rosparam load config/qr_params.yaml /
-rosparam set /output_path /home/chunran/02_calib_ws/src/FAST-Calib/output
-```
-
 Run solid-state LiDAR data:
 
 ```bash
-rosrun fast_calib lidar_center_test calib_data/fast-calib2-data/left.bag /livox/lidar solid
-rosrun fast_calib lidar_center_test calib_data/fast-calib2-data/mid.bag /livox/lidar solid
-rosrun fast_calib lidar_center_test calib_data/fast-calib2-data/right.bag /livox/lidar solid
+./build/lidar_center_test --pointcloud calib_data/fast-calib2-data/left.pcd --settings config/qr_params.yaml -o output --lidar-type solid
+./build/lidar_center_test --pointcloud calib_data/fast-calib2-data/mid.pcd --settings config/qr_params.yaml -o output --lidar-type solid
+./build/lidar_center_test --pointcloud calib_data/fast-calib2-data/right.pcd --settings config/qr_params.yaml -o output --lidar-type solid
 ```
 
 Run mechanical LiDAR data:
 
 ```bash
-rosrun fast_calib lidar_center_test calib_data/hesai-jt128/left.bag /lidar_points mech
-rosrun fast_calib lidar_center_test calib_data/hesai-jt128/mid.bag /lidar_points mech
-rosrun fast_calib lidar_center_test calib_data/hesai-jt128/right.bag /lidar_points mech
+./build/lidar_center_test --pointcloud calib_data/hesai-jt128/left/ --settings config/qr_params.yaml -o output --lidar-type mech
+./build/lidar_center_test --pointcloud calib_data/hesai-jt128/mid/ --settings config/qr_params.yaml -o output --lidar-type mech
+./build/lidar_center_test --pointcloud calib_data/hesai-jt128/right/ --settings config/qr_params.yaml -o output --lidar-type mech
 ```
 
 The test tool writes:
