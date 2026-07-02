@@ -9,11 +9,9 @@ which is included as part of this source code package.
 #define LIDAR_DETECT_HPP
 #define PCL_NO_PRECOMPILE
 
-#include <sensor_msgs/PointCloud2.h>
-#include <geometry_msgs/PointStamped.h>
 #include <Eigen/Dense>
-#include <ros/ros.h>
 #include <pcl/filters/voxel_grid.h>
+#include <pcl/filters/passthrough.h>
 #include <pcl/features/boundary.h>
 #include <pcl/features/normal_3d.h>
 #include "common_lib.h"
@@ -1824,17 +1822,8 @@ private:
     }
 
 public:
-    ros::Publisher filtered_pub_;
-    ros::Publisher plane_pub_;
-    ros::Publisher annulus_pub_;
-    ros::Publisher boundary_pub_;
-    ros::Publisher aligned_pub_;
-    ros::Publisher edge_pub_;
-    ros::Publisher center_z0_pub_;
-    ros::Publisher center_pub_;
-
-    // 构造 LiDAR 检测器并读取参数、初始化调试点云发布器
-    LidarDetect(ros::NodeHandle &nh, Params &params)
+    // 构造 LiDAR 检测器并读取参数（调试点云改由 main.cpp 落盘，不再发布 RViz topic）
+    LidarDetect(Params &params)
         : filtered_cloud_(new pcl::PointCloud<Common::Point>),
           plane_cloud_(new pcl::PointCloud<Common::Point>),
           annulus_original_cloud_(new pcl::PointCloud<Common::Point>),
@@ -1860,15 +1849,6 @@ public:
         auto_roi_voxel_leaf_ = params.auto_roi_voxel_leaf;
         annulus_voxel_leaf_ = params.annulus_voxel_leaf;
         use_auto_lidar_roi_ = params.use_auto_lidar_roi;
-
-        filtered_pub_ = nh.advertise<sensor_msgs::PointCloud2>("filtered_cloud", 1);
-        plane_pub_ = nh.advertise<sensor_msgs::PointCloud2>("plane_cloud", 1);
-        annulus_pub_ = nh.advertise<sensor_msgs::PointCloud2>("annulus_cloud", 1);
-        boundary_pub_ = nh.advertise<sensor_msgs::PointCloud2>("boundary_cloud", 1);
-        aligned_pub_ = nh.advertise<sensor_msgs::PointCloud2>("aligned_cloud", 1);
-        edge_pub_ = nh.advertise<sensor_msgs::PointCloud2>("edge_cloud", 1);
-        center_z0_pub_ = nh.advertise<sensor_msgs::PointCloud2>("center_z0_cloud", 10);
-        center_pub_ = nh.advertise<sensor_msgs::PointCloud2>("center_cloud", 10);
     }
 
     // 处理机械式 LiDAR 点云并提取 4 个 annulus 中心
