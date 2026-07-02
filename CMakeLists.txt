@@ -1,53 +1,24 @@
-cmake_minimum_required(VERSION 3.0.2)
+cmake_minimum_required(VERSION 3.10)
 project(fast_calib)
 
-find_package(catkin REQUIRED COMPONENTS
-  roscpp
-  sensor_msgs
-  pcl_ros
-  pcl_conversions
-  geometry_msgs
-)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 find_package(PCL 1.10 REQUIRED)
 find_package(OpenCV REQUIRED)
-
-catkin_package(
-  CATKIN_DEPENDS roscpp sensor_msgs pcl_conversions pcl_ros
-)
+find_package(yaml-cpp REQUIRED)
 
 include_directories(
   include
-  ${catkin_INCLUDE_DIRS}
   ${PCL_INCLUDE_DIRS}
   ${OpenCV_INCLUDE_DIRS}
 )
+add_definitions(${PCL_DEFINITIONS})
 
 set(CMAKE_BUILD_TYPE Release)
-
 if (CMAKE_BUILD_TYPE STREQUAL "Release")
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3")
 endif()
 
 add_executable(fast_calib src/main.cpp)
-
-target_link_libraries(fast_calib
-  ${catkin_LIBRARIES}
-  ${PCL_LIBRARIES}
-  ${OpenCV_LIBRARIES}
-)
-
-add_executable(lidar_center_test src/lidar_center_test.cpp)
-
-target_link_libraries(lidar_center_test
-  ${catkin_LIBRARIES}
-  ${PCL_LIBRARIES}
-  ${OpenCV_LIBRARIES}
-)
-
-add_executable(multi_fast_calib src/multi_scene.cpp)
-target_link_libraries(multi_fast_calib
-  ${catkin_LIBRARIES}
-  ${PCL_LIBRARIES}
-  ${OpenCV_LIBRARIES}
-)
+target_link_libraries(fast_calib ${PCL_LIBRARIES} ${OpenCV_LIBRARIES} yaml-cpp::yaml-cpp)
