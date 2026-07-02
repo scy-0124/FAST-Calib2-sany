@@ -182,6 +182,9 @@ class QRDetect
     #if (CV_MAJOR_VERSION == 3 && CV_MINOR_VERSION <= 2) || CV_MAJOR_VERSION < 3
           cv::aruco::drawAxis(imageCopy_, cameraMatrix_, distCoeffs_, rvecs[i],
                               tvecs[i], 0.1);
+    #else
+          cv::drawFrameAxes(imageCopy_, cameraMatrix_, distCoeffs_, rvecs[i],
+                            tvecs[i], 0.1);
     #endif
 
           // Accumulate pose for initial guess
@@ -223,6 +226,8 @@ class QRDetect
 
     #if (CV_MAJOR_VERSION == 3 && CV_MINOR_VERSION <= 2) || CV_MAJOR_VERSION < 3
         cv::aruco::drawAxis(imageCopy_, cameraMatrix_, distCoeffs_, rvec, tvec, 0.2);
+    #else
+        cv::drawFrameAxes(imageCopy_, cameraMatrix_, distCoeffs_, rvec, tvec, 0.2);
     #endif
 
         // Build transformation matrix to calibration target axis
