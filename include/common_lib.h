@@ -21,10 +21,14 @@ which is included as part of this source code package.
 #include <pcl/sample_consensus/model_types.h>
 #include <pcl/segmentation/extract_clusters.h>
 #include <pcl/registration/transformation_estimation_svd.h>
+#include <cerrno>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
+#include <filesystem>
 #include <iostream>
+#include <unistd.h>
 #include <vector>
 #include <opencv2/opencv.hpp>
 #include <yaml-cpp/yaml.h>
@@ -134,6 +138,42 @@ inline Params loadSettingsYaml(const std::string &path)
   params.z_max = need("z_max").as<double>();
 
   return params;
+}
+
+// 递归创建输出目录（mkdir -p 语义）并校验其存在、是目录、且当前用户可写；
+// 失败时打印清晰原因，调用方只需检查返回值决定是否提前退出。
+// 三个可执行文件的 main() 都应在 CLI 参数解析完成后、任何耗时的检测/加载工作开始前调用本函数，
+// 不要等到第一次真正写文件时才发现目录建不起来。目标已存在且可写时视为成功（不是每次都强制新建）。
+inline bool ensureOutputDirectory(const std::string &dir)
+{
+  if (dir.empty())
+  {
+    ROS_ERROR_STREAM("[Output] Output directory path is empty.");
+    return false;
+  }
+
+  std::error_code ec;
+  std::filesystem::create_directories(dir, ec);
+  if (ec)
+  {
+    ROS_ERROR_STREAM("[Output] Failed to create output directory '" << dir << "': " << ec.message());
+    return false;
+  }
+
+  std::error_code ec2;
+  if (!std::filesystem::is_directory(dir, ec2))
+  {
+    ROS_ERROR_STREAM("[Output] Output path '" << dir << "' exists but is not a directory.");
+    return false;
+  }
+
+  if (access(dir.c_str(), W_OK) != 0)
+  {
+    ROS_ERROR_STREAM("[Output] Output directory '" << dir << "' is not writable: " << std::strerror(errno));
+    return false;
+  }
+
+  return true;
 }
 
 // 计算两组等长点云之间的三维 RMSE
@@ -348,13 +388,21 @@ void saveCalibrationResults(const Params& params, const Eigen::Matrix4f& transfo
     std::cerr << BOLDRED << "[Error] Failed to open single_calib_result.txt for writing!" << RESET << std::endl;
   }
   
-  if (pcl::io::savePCDFileASCII(outputDir + "colored_cloud.pcd", *colored_cloud) == 0) 
+  try
   {
-    std::cout << BOLDYELLOW << "[Result] Saved colored point cloud to: " << BOLDWHITE << outputDir << "colored_cloud.pcd" << RESET << std::endl;
-  } 
-  else 
+    if (pcl::io::savePCDFileASCII(outputDir + "colored_cloud.pcd", *colored_cloud) == 0)
+    {
+      std::cout << BOLDYELLOW << "[Result] Saved colored point cloud to: " << BOLDWHITE << outputDir << "colored_cloud.pcd" << RESET << std::endl;
+    }
+    else
+    {
+      std::cerr << BOLDRED << "[Error] Failed to save colored point cloud to " << outputDir << "colored_cloud.pcd" << "!" << RESET << std::endl;
+    }
+  }
+  catch (const std::exception &e)
   {
-    std::cerr << BOLDRED << "[Error] Failed to save colored point cloud to " << outputDir << "colored_cloud.pcd" << "!" << RESET << std::endl;
+    std::cerr << BOLDRED << "[Error] Failed to save colored point cloud to " << outputDir << "colored_cloud.pcd"
+               << ": " << e.what() << RESET << std::endl;
   }
  
   imwrite(outputDir + "qr_detect.png", img_input);

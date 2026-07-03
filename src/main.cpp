@@ -10,8 +10,6 @@ which is included as part of this source code package.
 #include "data_preprocess.hpp"
 #include "vehicle_config_reader.hpp"
 
-#include <sys/stat.h>
-
 namespace
 {
 
@@ -72,14 +70,28 @@ void saveDebugPcd(const std::string &output_dir, const std::string &name,
                   const pcl::PointCloud<Common::Point>::Ptr &cloud)
 {
     if (!cloud || cloud->empty()) return;
-    pcl::io::savePCDFileBinaryCompressed(output_dir + "/" + name, *cloud);
+    try
+    {
+        pcl::io::savePCDFileBinaryCompressed(output_dir + "/" + name, *cloud);
+    }
+    catch (const std::exception &e)
+    {
+        ROS_ERROR_STREAM("[Main] Failed to save " << output_dir << "/" << name << ": " << e.what());
+    }
 }
 
 void saveDebugPcd(const std::string &output_dir, const std::string &name,
                   const pcl::PointCloud<pcl::PointXYZ>::Ptr &cloud)
 {
     if (!cloud || cloud->empty()) return;
-    pcl::io::savePCDFileBinaryCompressed(output_dir + "/" + name, *cloud);
+    try
+    {
+        pcl::io::savePCDFileBinaryCompressed(output_dir + "/" + name, *cloud);
+    }
+    catch (const std::exception &e)
+    {
+        ROS_ERROR_STREAM("[Main] Failed to save " << output_dir << "/" << name << ": " << e.what());
+    }
 }
 
 }  // namespace
@@ -103,7 +115,10 @@ int main(int argc, char **argv)
     }
 
     while (!output_dir.empty() && output_dir.back() == '/') output_dir.pop_back();
-    mkdir(output_dir.c_str(), 0755);
+    if (!ensureOutputDirectory(output_dir))
+    {
+        return 1;
+    }
     params.output_path = output_dir;
 
     DataPreprocess data_preprocess(image_path, pointcloud_path, lidar_type_override);
@@ -146,6 +161,20 @@ int main(int argc, char **argv)
     validateTargetGeometry(qr_centers, params.delta_width_circles, params.delta_height_circles, "QR");
     validateTargetGeometry(lidar_centers, params.delta_width_circles, params.delta_height_circles, "LiDAR");
 
+    // LiDAR 侧的过程点云只依赖 LidarDetect 自身的检测流水线，不依赖 QR/LiDAR 是否配对成功，
+    // 所以无论最终标定成功与否都要落盘，方便检测失败时排查是哪一步丢的点。落盘路径就是用户
+    // 用 -o 传进来的 output_dir，不额外新增参数。
+    if (DEBUG)
+    {
+        saveDebugPcd(output_dir, "debug_filtered_cloud.pcd", lidar_detect.getFilteredCloud());
+        saveDebugPcd(output_dir, "debug_plane_cloud.pcd", lidar_detect.getPlaneCloud());
+        saveDebugPcd(output_dir, "debug_annulus_cloud.pcd", lidar_detect.getAnnulusOriginalCloud());
+        saveDebugPcd(output_dir, "debug_boundary_cloud.pcd", lidar_detect.getBoundaryOriginalCloud());
+        saveDebugPcd(output_dir, "debug_aligned_cloud.pcd", lidar_detect.getAlignedCloud());
+        saveDebugPcd(output_dir, "debug_edge_cloud.pcd", lidar_detect.getEdgeCloud());
+        saveDebugPcd(output_dir, "debug_center_z0_cloud.pcd", lidar_detect.getCenterZ0Cloud());
+    }
+
     if (lidar_centers->size() != TARGET_NUM_CIRCLES || qr_centers->size() != TARGET_NUM_CIRCLES)
     {
         ROS_ERROR("[Main] Detection failed: lidar_centers=%zu, qr_centers=%zu (need %d each). Aborting calibration.",
@@ -180,15 +209,9 @@ int main(int argc, char **argv)
 
     saveCalibrationResults(params, transformation, colored_cloud, qr_detect.imageCopy_);
 
+    // aligned_lidar_centers 是拿 QR-LiDAR SVD 外参对齐后的结果，只有走到这里（标定成功）才存在。
     if (DEBUG)
     {
-        saveDebugPcd(output_dir, "debug_filtered_cloud.pcd", lidar_detect.getFilteredCloud());
-        saveDebugPcd(output_dir, "debug_plane_cloud.pcd", lidar_detect.getPlaneCloud());
-        saveDebugPcd(output_dir, "debug_annulus_cloud.pcd", lidar_detect.getAnnulusOriginalCloud());
-        saveDebugPcd(output_dir, "debug_boundary_cloud.pcd", lidar_detect.getBoundaryOriginalCloud());
-        saveDebugPcd(output_dir, "debug_aligned_cloud.pcd", lidar_detect.getAlignedCloud());
-        saveDebugPcd(output_dir, "debug_edge_cloud.pcd", lidar_detect.getEdgeCloud());
-        saveDebugPcd(output_dir, "debug_center_z0_cloud.pcd", lidar_detect.getCenterZ0Cloud());
         saveDebugPcd(output_dir, "debug_aligned_lidar_centers.pcd", aligned_lidar_centers);
     }
 

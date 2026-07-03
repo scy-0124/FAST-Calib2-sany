@@ -122,6 +122,10 @@ int main(int argc, char** argv)
         return 1;
     }
     while (!output_dir.empty() && output_dir.back() == '/') output_dir.pop_back();
+    if (!ensureOutputDirectory(output_dir))
+    {
+        return 1;
+    }
 
     const std::string midtxt_path = output_dir + "/circle_center_record.txt";
     const std::string multi_output_path = output_dir + "/multi_calib_result.txt";
