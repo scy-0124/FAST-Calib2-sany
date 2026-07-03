@@ -110,3 +110,29 @@
   的场景验证了干净报错+退出码 1、不 core dump；`fast_calib`/`multi_fast_calib` 用同样的"父目录缺失"
   场景各验证一遍，行为与 `lidar_center_test` 一致；另外重跑了一遍此前验证过的成功/部分成功场景
   （2/4 候选聚类），确认输出文件名、内容、退出码跟修复前完全一致，没有引入回归。
+
+- 按用户要求放宽标定板平面 RANSAC 拟合容差：`lidar_detect.hpp` 的 `fitBoardPlaneFromRoi()` 里
+  `fitPlaneRansac` 距离阈值 0.01→0.03m，紧接着 `extractPlaneInliers` 提取 `plane_cloud_` 的阈值
+  0.015→0.03m（两处必须一起改，只改前者的话最终进 `plane_cloud_` 的点还是按旧阈值卡，不生效）。
+  用 `Taijia_001_20260630110807641Z8` 的 `front_jt128` 数据对比新旧阈值：旧阈值下该场景本来就只能
+  拼出 1 个候选聚类（4 环里离散边界点总量不够 `clusterMechanicalAnnulusBoundaryCloud` 的
+  `minClusterSize=80` 门槛），新阈值下变成 0 个候选聚类，两者都无法凑够 4 个圆心——确认了这次放宽
+  没有让本来能检出的场景变得检不出，该场景的失败另有原因（见下一条）。
+
+- 修复低动态范围（无饱和高反回波）点云下 annulus 检测阈值算冒高、把环点自己滤掉的问题。
+  `computeHighIntensityThreshold()` 里 `relative_high = otsu + 0.55*(max_i - otsu)` 假设高反回波
+  接近饱和（`max_i` 接近 255）；实测 `front_jt128` 一份场景 `max_i≈91`（无饱和），`relative_high`
+  算出 59.748，比环带实际强度（30~60）还高，导致 `adjustHighIntensityThresholdForLabel()` 里
+  `Annulus` 标签原有的饱和回退分支（触发条件 `max_i > 200.0f`）根本碰不到，最终该场景 annulus 边界点
+  被阈值滤空，`clusterMechanicalAnnulusBoundaryCloud` 找不到任何聚类，圆心检出数从 0/4 到 2/4 不等。
+  修复：在 `Annulus` 分支内、饱和回退分支之后新增一条低动态范围回退——`max_i < 150.0f &&
+  threshold > high_quantile` 时，阈值回退到 `max(otsu_threshold, high_quantile)`（约等于 p92）；
+  两个回退分支的触发条件（`max_i > 200` vs `max_i < 150`）互斥，不影响原饱和分支的行为，
+  `computeHighIntensityThreshold()` 本体、ring 边界提取的跳变阈值、非 Annulus 标签的回退逻辑均未改动。
+  用 `front_jt128`（`max_i≈91`）实跑验证：新增的 `overshoots on low-dynamic-range cloud` WARN 按预期
+  出现，阈值从 59.748 回退到 41.000，两次边界提取尝试（插值/高反侧）都拿到 4 个聚类、4 个候选圆心，
+  几何一致性校验通过（max error 9.07mm，RMSE 6.97mm），四环半径校验通过（centerline 最大误差
+  2.59mm，半宽最大误差 4.34mm）——从 0/4 圆心恢复到 4/4。饱和场景（`max_i > 200`）行为不变没有实测
+  数据可复现（现有 `calib_data/` 几份场景手动 ROI 都是为第一个场景配的，覆盖不到其他场景的标定板），
+  按代码逻辑确认：新分支条件 `max_i < 150.0f` 与原饱和分支条件 `max_i > 200.0f` 互斥，`max_i > 200`
+  时新分支永远不会触发，原饱和分支的判断和行为原样保留。

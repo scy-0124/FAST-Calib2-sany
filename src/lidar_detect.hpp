@@ -389,6 +389,18 @@ private:
                          label.c_str(), threshold, fallback_threshold);
                 threshold = fallback_threshold;
             }
+
+            // 低动态范围（无饱和回波）时 relative_high 会过冲，回退到 max(otsu, p92)
+            const bool low_dynamic_range =
+                max_i < 150.0f &&
+                threshold > high_quantile;
+            if (low_dynamic_range)
+            {
+                const float fallback_threshold = std::max(otsu_threshold, high_quantile);
+                ROS_WARN("[LiDAR] %s threshold %.3f overshoots on low-dynamic-range cloud (max %.1f); fallback to %.3f.",
+                         label.c_str(), threshold, max_i, fallback_threshold);
+                threshold = fallback_threshold;
+            }
             return;
         }
 
@@ -1373,13 +1385,13 @@ private:
             return false;
         }
 
-        if (!fitPlaneRansac(filtered_cloud_, plane_coefficients, 0.01))
+        if (!fitPlaneRansac(filtered_cloud_, plane_coefficients, 0.03))
         {
             ROS_WARN("[LiDAR] Unable to fit board plane from ROI cloud.");
             return false;
         }
 
-        extractPlaneInliers(filtered_cloud_, plane_coefficients, plane_cloud_, 0.015);
+        extractPlaneInliers(filtered_cloud_, plane_coefficients, plane_cloud_, 0.03);
         ROS_INFO("Plane cloud size: %zu", plane_cloud_->size());
         if (plane_cloud_->size() < 500)
         {
