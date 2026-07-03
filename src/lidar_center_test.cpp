@@ -22,7 +22,6 @@ LiDAR-only batch test entry for target annulus center extraction.
 #include <pcl/impl/pcl_base.hpp>
 #include <pcl/segmentation/impl/extract_clusters.hpp>
 #include <pcl/segmentation/impl/sac_segmentation.hpp>
-#include <sys/stat.h>
 
 namespace
 {
@@ -84,19 +83,12 @@ std::string sanitizeFilePart(std::string value)
     return value;
 }
 
-// 确保输出目录存在
-void ensureDirectory(const std::string& path)
-{
-    if (path.empty()) return;
-    mkdir(path.c_str(), 0755);
-}
-
-// 解析测试输出目录：CLI 必须显式传 -o，这里只需要去掉尾部斜杠、确保目录存在
+// 解析测试输出目录：CLI 必须显式传 -o，这里只需要去掉尾部斜杠。
+// 目录本身的创建/校验已经在 main() 里检测开始前用 common_lib.h::ensureOutputDirectory() 做过了，
+// 这里不再重复创建。
 std::string resolveOutputDirectory(const Params& params)
 {
-    std::string output_dir = trimTrailingSlash(params.output_path);
-    ensureDirectory(output_dir);
-    return output_dir;
+    return trimTrailingSlash(params.output_path);
 }
 
 // 根据点云路径（单个 .pcd 文件或文件夹）所在目录和文件名生成输出文件前缀
@@ -201,9 +193,17 @@ bool savePipelineCloud(const std::string& dir, const std::string& name,
 {
     if (!cloud || cloud->empty()) return false;
     const std::string path = dir + "/" + name;
-    if (pcl::io::savePCDFileBinaryCompressed(path, *cloud) != 0)
+    try
     {
-        ROS_ERROR_STREAM("[LiDAR Test] Failed to save pipeline stage: " << path);
+        if (pcl::io::savePCDFileBinaryCompressed(path, *cloud) != 0)
+        {
+            ROS_ERROR_STREAM("[LiDAR Test] Failed to save pipeline stage: " << path);
+            return false;
+        }
+    }
+    catch (const std::exception& e)
+    {
+        ROS_ERROR_STREAM("[LiDAR Test] Failed to save pipeline stage: " << path << " (" << e.what() << ")");
         return false;
     }
     std::cout << "[LiDAR Test] Saved pipeline stage: " << path
@@ -255,10 +255,17 @@ void saveClusterClouds(const std::vector<LidarDetect::ClusterFitDebug>& records,
         char name[64];
         std::snprintf(name, sizeof(name), "07_cluster_%02zu.pcd", i);
         const std::string path = dir + "/" + name;
-        if (pcl::io::savePCDFileBinaryCompressed(path, *colored) == 0)
+        try
         {
-            std::cout << "[LiDAR Test] Saved pipeline stage: " << path
-                      << " (" << colored->size() << " points, " << status << ")" << std::endl;
+            if (pcl::io::savePCDFileBinaryCompressed(path, *colored) == 0)
+            {
+                std::cout << "[LiDAR Test] Saved pipeline stage: " << path
+                          << " (" << colored->size() << " points, " << status << ")" << std::endl;
+            }
+        }
+        catch (const std::exception& e)
+        {
+            ROS_ERROR_STREAM("[LiDAR Test] Failed to save pipeline stage: " << path << " (" << e.what() << ")");
         }
     }
 }
@@ -305,9 +312,16 @@ void saveCircleFitVisualizations(const std::vector<LidarDetect::ClusterFitDebug>
         char name[64];
         std::snprintf(name, sizeof(name), "08_circle_fit_%02zu.pcd", i);
         const std::string path = dir + "/" + name;
-        if (pcl::io::savePCDFileBinaryCompressed(path, *viz) == 0)
+        try
         {
-            std::cout << "[LiDAR Test] Saved pipeline stage: " << path << std::endl;
+            if (pcl::io::savePCDFileBinaryCompressed(path, *viz) == 0)
+            {
+                std::cout << "[LiDAR Test] Saved pipeline stage: " << path << std::endl;
+            }
+        }
+        catch (const std::exception& e)
+        {
+            ROS_ERROR_STREAM("[LiDAR Test] Failed to save pipeline stage: " << path << " (" << e.what() << ")");
         }
     }
 }
@@ -323,7 +337,10 @@ void savePipelineStages(const pcl::PointCloud<Common::Point>::Ptr& raw_cloud,
 {
     const std::string output_dir = resolveOutputDirectory(params);
     const std::string dir = output_dir + "/" + outputPrefixForPointcloud(pointcloud_path) + "_pipeline";
-    ensureDirectory(dir);
+    if (!ensureOutputDirectory(dir))
+    {
+        return;
+    }
 
     savePipelineCloud<Common::Point>(dir, "00_raw_cloud.pcd", raw_cloud);
     savePipelineCloud<Common::Point>(dir, "01_roi_filtered.pcd", lidar_detect.getFilteredCloud());
@@ -445,10 +462,17 @@ bool saveDebugCloud(const pcl::PointCloud<Common::Point>::Ptr& board_cloud,
     debug_cloud->height = 1;
     debug_cloud->is_dense = false;
 
-    const int ret = pcl::io::savePCDFileBinaryCompressed(output_path, *debug_cloud);
-    if (ret != 0)
+    try
     {
-        ROS_ERROR_STREAM("[LiDAR Test] Failed to save debug cloud to " << output_path);
+        if (pcl::io::savePCDFileBinaryCompressed(output_path, *debug_cloud) != 0)
+        {
+            ROS_ERROR_STREAM("[LiDAR Test] Failed to save debug cloud to " << output_path);
+            return false;
+        }
+    }
+    catch (const std::exception& e)
+    {
+        ROS_ERROR_STREAM("[LiDAR Test] Failed to save debug cloud to " << output_path << ": " << e.what());
         return false;
     }
 
@@ -733,6 +757,12 @@ int main(int argc, char** argv)
                   << " --pointcloud <path|folder> --settings <path> -o <output_dir>"
                   << " [--lidar-type auto|solid|mech]" << std::endl;
         return 2;
+    }
+
+    while (!output_dir.empty() && output_dir.back() == '/') output_dir.pop_back();
+    if (!ensureOutputDirectory(output_dir))
+    {
+        return 1;
     }
 
     Params params = loadSettingsYaml(settings_path);

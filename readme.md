@@ -84,3 +84,29 @@
   （最终仍因只有 2/4 圆心而按预期返回退出码 1），成功落盘 `00/01/02/03/04/06` + 2 份
   `07_cluster_*`/`08_circle_fit_*`，`05_boundary_original`/`09_center_z0` 正确留空；另用自动 ROI 在
   更早的高反聚类阶段就失败的单帧数据验证了"检测在很早就失败时只落盘 `00_raw_cloud`，不崩溃"。
+
+## 2026-07-03
+
+- 修复 `-o` 输出目录父目录不存在时进程直接 core dump 的问题。用户实跑
+  `lidar_center_test --pointcloud ... -o calib_data/Taijia_xxx/output ...`（`calib_data/` 在
+  `.gitignore` 里，worktree 中本来就没有）时，检测正常跑完后落盘阶段直接
+  `terminate called after throwing an instance of 'pcl::IOException'` 崩溃退出。根因两层：
+  （1）全仓库所有 `mkdir()` 都是单层、不检查返回值，父目录缺失就静默创建失败——`lidar_center_test`
+  尤其严重，目录校验只在第一次真正存文件时才惰性触发（`saveCenterCoordinates`/`saveDebugCloud`/
+  `savePipelineStages` 内部），也就是**检测跑完之后**才发现目录建不起来；
+  （2）`pcl::io::savePCDFile*` 系列在目标目录不存在时会 `throw pcl::IOException`（确认自 PCL 1.14
+  头文件：空点云只是 `PCL_WARN` 不崩，但 `open()` 失败会抛），全仓库没有任何 `try/catch`，异常一路
+  冒到 `std::terminate`。已确认 7 处未加保护的调用点：`src/main.cpp` 的 `saveDebugPcd()` 两个重载、
+  `include/common_lib.h` 的 `saveCalibrationResults()`、`src/lidar_center_test.cpp` 的
+  `savePipelineCloud`/`saveClusterClouds`/`saveCircleFitVisualizations`/`saveDebugCloud`（后四个是
+  昨天新加的过程点云落盘代码贡献的）。
+  修复：`include/common_lib.h` 新增共享的 `ensureOutputDirectory()`（基于 `std::filesystem::
+  create_directories` 递归创建 + `is_directory`/`access(W_OK)` 校验存在性和可写性），三个可执行文件
+  的 `main()` 都在 CLI 解析完成后、检测/加载开始前调用它（`lidar_center_test.cpp` 原来是三者里校验
+  最晚的一个，这次把校验提到了最前面；`multi_scene.cpp` 原来完全没有目录创建，顺带补上做行为统一）；
+  上述 7 处未加保护的 `pcl::io::savePCDFile*` 调用点逐一补了 `try/catch`，异常统一转成打印错误+按
+  原有失败路径返回，不引入新的错误处理风格。用真实场景验证：父目录缺失但可创建时现在会静默递归建好、
+  检测正常继续跑、退出码按检测结果是 0/1（不再崩溃）；目标路径被普通文件占用、目录只读两种"真正建不起来"
+  的场景验证了干净报错+退出码 1、不 core dump；`fast_calib`/`multi_fast_calib` 用同样的"父目录缺失"
+  场景各验证一遍，行为与 `lidar_center_test` 一致；另外重跑了一遍此前验证过的成功/部分成功场景
+  （2/4 候选聚类），确认输出文件名、内容、退出码跟修复前完全一致，没有引入回归。

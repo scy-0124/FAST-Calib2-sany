@@ -10,8 +10,6 @@ which is included as part of this source code package.
 #include "data_preprocess.hpp"
 #include "vehicle_config_reader.hpp"
 
-#include <sys/stat.h>
-
 namespace
 {
 
@@ -72,14 +70,28 @@ void saveDebugPcd(const std::string &output_dir, const std::string &name,
                   const pcl::PointCloud<Common::Point>::Ptr &cloud)
 {
     if (!cloud || cloud->empty()) return;
-    pcl::io::savePCDFileBinaryCompressed(output_dir + "/" + name, *cloud);
+    try
+    {
+        pcl::io::savePCDFileBinaryCompressed(output_dir + "/" + name, *cloud);
+    }
+    catch (const std::exception &e)
+    {
+        ROS_ERROR_STREAM("[Main] Failed to save " << output_dir << "/" << name << ": " << e.what());
+    }
 }
 
 void saveDebugPcd(const std::string &output_dir, const std::string &name,
                   const pcl::PointCloud<pcl::PointXYZ>::Ptr &cloud)
 {
     if (!cloud || cloud->empty()) return;
-    pcl::io::savePCDFileBinaryCompressed(output_dir + "/" + name, *cloud);
+    try
+    {
+        pcl::io::savePCDFileBinaryCompressed(output_dir + "/" + name, *cloud);
+    }
+    catch (const std::exception &e)
+    {
+        ROS_ERROR_STREAM("[Main] Failed to save " << output_dir << "/" << name << ": " << e.what());
+    }
 }
 
 }  // namespace
@@ -103,7 +115,10 @@ int main(int argc, char **argv)
     }
 
     while (!output_dir.empty() && output_dir.back() == '/') output_dir.pop_back();
-    mkdir(output_dir.c_str(), 0755);
+    if (!ensureOutputDirectory(output_dir))
+    {
+        return 1;
+    }
     params.output_path = output_dir;
 
     DataPreprocess data_preprocess(image_path, pointcloud_path, lidar_type_override);
