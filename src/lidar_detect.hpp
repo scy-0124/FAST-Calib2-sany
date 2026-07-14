@@ -360,7 +360,10 @@ private:
         // Otsu 给出数据驱动的前景分割，再用高强度侧约束排除弱反射背景点。
         foreground_low = percentile(foreground_intensities, 0.15);
         high_quantile = percentile(intensities, 0.92);
-        relative_high = otsu_threshold + 0.55f * (max_i - otsu_threshold);
+        // relative_high 原来直接用 max_i，个别打满量程的离群点（噪声/镜面反光）会把它顶穿；
+        // 改用 p98 代替 max_i，只有当高强度侧本身就密集聚集在顶部时才会被拉高，抗离群点。
+        const float p98 = percentile(intensities, 0.98);
+        relative_high = otsu_threshold + 0.55f * (p98 - otsu_threshold);
         threshold = std::max(std::max(otsu_threshold, foreground_low), relative_high);
         return true;
     }

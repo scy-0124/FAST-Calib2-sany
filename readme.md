@@ -136,3 +136,28 @@
   数据可复现（现有 `calib_data/` 几份场景手动 ROI 都是为第一个场景配的，覆盖不到其他场景的标定板），
   按代码逻辑确认：新分支条件 `max_i < 150.0f` 与原饱和分支条件 `max_i > 200.0f` 互斥，`max_i > 200`
   时新分支永远不会触发，原饱和分支的判断和行为原样保留。
+
+## 2026-07-14
+
+- 修复 annulus 强度阈值被少数极端离群点顶穿的问题。用 `0703-data-001` 场景的 `front_jt128`
+  数据实跑 `lidar_center_test --lidar-type mech` 发现检测失败：日志显示 `max_i=255`（说明确实有
+  点打到了传感器强度上限），但 `foreground p15=46.000` 离 `max_i` 很远——说明 Otsu 阈值以上的
+  前景大部分并不饱和，只有极少数孤立点冲到了 255。`computeHighIntensityThreshold()` 里
+  `relative_high = otsu_threshold + 0.55f * (max_i - otsu_threshold)` 直接用 `max_i` 计算，
+  被这几个孤立点拉到 158.321，远超真实环带强度所在的 `p92=78`，把环点自己滤空，最终圆心从该有的
+  4/4 掉到 0/4。这是第三种失效模式，跟今天之前已修的两条 `adjustHighIntensityThresholdForLabel()`
+  回退分支都对不上号：`saturated_foreground` 分支要求 `foreground_low > max_i - 1.0f`（前景几乎
+  全饱和），`low_dynamic_range` 分支要求 `max_i < 150.0f`（整体强度都不高），这次是"`max_i` 因个别
+  离群点冲到 255，但前景主体强度并不高"的中间态，两条件都不触发。
+  修复：`relative_high` 改用 `p98`（`percentile(intensities, 0.98)`）代替 `max_i`：
+  `const float p98 = percentile(intensities, 0.98); relative_high = otsu_threshold + 0.55f *
+  (p98 - otsu_threshold);`，只有当高强度侧本身就密集聚集在顶部（真饱和）时才会被拉高，个别孤立
+  离群点不再能单独左右整个阈值。用 `0703-data-001/front_jt128` 验证：`relative_high` 从 158.321
+  降到 69.771，环带点从 4 个恢复到 4851 个，两次提取尝试都拿到 4 个候选聚类，几何一致性校验通过
+  （max error 5.20mm，RMSE 3.45mm），4/4 圆心检出。回归验证此前"低动态范围"修复用的
+  `Taijia_001_20260630110807641Z8/front_jt128`（`max_i≈91`，用临时自动 ROI settings 跑，没有
+  改动 `config/qr_params.yaml`）：`relative_high` 现在直接算出 36.756（< p92=40），**不需要再
+  触发 `low_dynamic_range` 回退分支**就已经是合理阈值，同样 4/4 圆心检出，max error 7.83mm，
+  RMSE 7.03mm，跟改动前量级相当，确认没有引入回归。`saturated_foreground` 分支覆盖的"前景几乎
+  全饱和"场景依然没有真实数据可验证（这个缺口改动前就存在），按逻辑推断：真饱和场景下 `p98` 会
+  非常接近 `max_i`，两条回退分支行为基本不受这次改动影响。
